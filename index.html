@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HUD 거리 사격 실험</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#0b1020; --card:#141b30; --line:#2a3558; --text:#e6ecff; --mute:#8d9bc4; --accent:#4f7cff; --ok:#3ccf7e; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font-family:"Noto Sans KR","Malgun Gothic",sans-serif; }
+  #stage canvas { display:block; position:fixed; inset:0; }
+  #menu { position:fixed; inset:0; overflow:auto; background:rgba(8,12,24,.9); padding:24px 16px 48px; z-index:10; }
+  #menu[hidden] { display:none; }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  .sub { color:var(--mute); margin:0 0 20px; font-size:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:16px; margin:0 0 12px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--mute); }
+  label.inline { flex-direction:row; align-items:center; gap:8px; color:var(--text); }
+  input, select { background:#0e1426; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px; font:inherit; font-size:15px; }
+  input[type=checkbox] { width:18px; height:18px; }
+  details summary { cursor:pointer; color:var(--mute); font-size:14px; margin-top:12px; }
+  details .grid { margin-top:12px; }
+  .btns { display:flex; gap:12px; flex-wrap:wrap; }
+  button { font:inherit; border:0; border-radius:10px; padding:12px 18px; cursor:pointer; background:#26304f; color:var(--text); font-size:15px; }
+  button.primary { background:var(--accent); font-weight:700; font-size:17px; padding:14px 22px; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.small { padding:6px 10px; font-size:13px; }
+  #status { color:var(--mute); font-size:13px; margin-top:10px; min-height:1em; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { border-bottom:1px solid var(--line); padding:6px 4px; text-align:right; }
+  th:first-child, td:first-child { text-align:left; }
+  .hist-item { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .hist-item .meta { font-size:13px; }
+  .hist-item .meta b { font-size:14px; }
+  .note { font-size:13px; color:var(--mute); line-height:1.6; }
+  #help { position:fixed; left:12px; bottom:12px; background:rgba(8,12,24,.8); border:1px solid var(--line);
+    border-radius:8px; padding:8px 12px; font-size:13px; color:var(--mute); z-index:5; }
+  #help[hidden] { display:none; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="stage"></div>
+
+<div id="help" hidden>드래그: 둘러보기 · <b>Space</b>: 지령 확인 · <b>클릭</b>: 쏘기 · <b>Esc</b>: 그만하기</div>
+
+<div id="menu">
+  <div class="wrap">
+    <h1>HUD 거리 사격 실험</h1>
+    <p class="sub">HUD 지령을 읽고 확인 버튼 → 나타난 표적 중 맞는 것을 쏜다. HUD 거리 조건 A 가까이 · B 초점 거리 · C 표적과 같은 거리.</p>
+
+    <div class="card">
+      <h2>참가자</h2>
+      <div class="grid">
+        <label>참가자 ID <input id="f_pid" type="text"></label>
+        <label>조건 순서
+          <select id="f_order">
+            <option value="ABC">ABC (참가자 1)</option>
+            <option value="BCA">BCA (참가자 2)</option>
+            <option value="CAB">CAB (참가자 3)</option>
+            <option value="ACB">ACB</option>
+            <option value="BAC">BAC</option>
+            <option value="CBA">CBA</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>조건과 판 설정 (예비 실험에서 확정)</h2>
+      <div class="grid">
+        <label>A 가까이: HUD 거리 (m) <input id="f_near" type="number" step="0.05" min="0.2"></label>
+        <label>B 초점 거리: HUD 거리 (m) <input id="f_focal" type="number" step="0.05" min="0.2"></label>
+        <label>C 표적 거리 = HUD 거리 (m) <input id="f_target" type="number" step="0.5" min="1"></label>
+        <label>한 판 길이 (초) <input id="f_roundSec" type="number" step="5" min="10"></label>
+        <label>조건당 판 수 <input id="f_roundsPer" type="number" step="1" min="1"></label>
+        <label>연습 판 길이 (초) <input id="f_practiceSec" type="number" step="5" min="10"></label>
+        <label class="inline"><input id="f_practice" type="checkbox"> 시작 전에 연습 판 (B 조건, 기록에 practice=1로 남음)</label>
+      </div>
+      <details>
+        <summary>고급 설정</summary>
+        <div class="grid">
+          <label>HUD 가로 크기 (시각각 °) <input id="f_hudAngle" type="number" step="1" min="5"></label>
+          <label>HUD 위치: 시선 아래 (°) <input id="f_hudDown" type="number" step="1" min="0"></label>
+          <label>표적 개수 (2–10) <input id="f_nTargets" type="number" step="1" min="2" max="10"></label>
+          <label>표적 크기 (시각각 °) <input id="f_targetAngle" type="number" step="0.5" min="1"></label>
+          <label>명중 후 다음 지령까지 (ms) <input id="f_itiMs" type="number" step="50" min="0"></label>
+          <label class="inline"><input id="f_keepCmd" type="checkbox"> 확인 뒤에도 지령을 흐리게 남겨 둠</label>
+        </div>
+      </details>
+    </div>
+
+    <div class="card">
+      <div class="btns">
+        <button id="btnVR" class="primary" disabled>VR로 시작</button>
+        <button id="btnDesk">브라우저에서 해 보기 (마우스)</button>
+      </div>
+      <div id="status"></div>
+    </div>
+
+    <div class="card" id="resultsCard" hidden>
+      <h2>최근 결과 요약</h2>
+      <div id="summary"></div>
+    </div>
+
+    <div class="card">
+      <h2>저장된 기록 (이 기기 브라우저)</h2>
+      <div id="history" class="note">아직 없음</div>
+      <p class="note">시행마다 자동 저장됩니다. Quest에서 내려받은 CSV는 헤드셋의 Download 폴더에 저장되며, PC에 USB로 연결해 꺼낼 수 있습니다.</p>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./main.js"></script>
+</body>
+</html>
