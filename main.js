@@ -275,7 +275,10 @@ function drawHUD(st) {
   c.lineWidth = 5; c.strokeStyle = 'rgba(110,160,255,0.7)'; c.stroke();
   c.textBaseline = 'middle';
   c.font = `700 44px ${FONT}`; c.fillStyle = '#bcd0ff';
-  c.textAlign = 'left'; c.fillText(`남은 시간 ${st.sec}`, 50, 72);
+  c.textAlign = 'left';
+  c.fillStyle = st.paused ? '#6b7899' : '#ffd36b'; // 멈춰 있을 때는 흐리게
+  c.fillText(`남은 시간 ${st.sec}`, 50, 72);
+  c.fillStyle = '#bcd0ff';
   c.textAlign = 'center'; c.fillText(`점수 ${st.score}`, W / 2 + 40, 72);
   c.textAlign = 'right'; c.fillText(`콤보 ${st.combo}`, W - 50, 72);
   if (st.cmd) {
@@ -573,7 +576,7 @@ function showIntro() {
     title: r.practice ? '연습 판' : `${r.pos} / ${total}번째 판`,
     lines: [
       `지령을 읽고 ${confirmName()} 확인 → 맞는 표적을 ${shootName()} 쏘기`,
-      `제한 시간 ${sec}초 · 연속으로 맞히면 콤보 점수`,
+      `제한 시간 ${sec}초 (지령을 읽는 동안은 멈춤) · 연속 명중은 콤보`,
       '정면을 보고, 준비되면 시작을 누르세요',
     ],
     buttons: [{ label: '시작', onClick: startRound }],
@@ -588,7 +591,8 @@ function startRound() {
   setHudDistance(d);
   const now = performance.now();
   const sec = r.practice ? S.practiceSec : S.roundSec;
-  game.R = { ...r, hudDist: d, sec, startT: now, endT: now + sec * 1000,
+  // 남은 시간은 표적을 찾아 쏘는 동안(확인 → 명중)에만 줄어든다
+  game.R = { ...r, hudDist: d, sec, startT: now, leftMs: sec * 1000, lastT: now,
     score: 0, combo: 0, maxCombo: 0, hits: 0, wrongs: 0, misses: 0, n: 0 };
   game.T = null;
   game.fb = null;
@@ -780,7 +784,7 @@ function logRound(R) {
   log.rounds.push({
     session: game.sessionId, participant: S.pid, order: S.order, mode: game.mode,
     round_pos: R.pos, cond: R.cond, cond_name: COND[R.cond].name, hud_dist_m: R.hudDist,
-    round_sec: R.sec, hits: R.hits, wrong_hits: R.wrongs, misses: R.misses,
+    round_sec: R.sec, wall_sec: r1((performance.now() - R.startT) / 1000), hits: R.hits, wrong_hits: R.wrongs, misses: R.misses,
     score: R.score, max_combo: R.maxCombo, eye_fatigue: R.eye, dizziness: R.dizzy,
     pref_comfort: '', pref_play: '',
   });
@@ -864,7 +868,7 @@ function renderHistory() {
 // ============================================================
 function hudState(now) {
   const R = game.R, T = game.T;
-  const st = { sec: Math.max(0, Math.ceil((R.endT - now) / 1000)), score: R.score, combo: R.combo };
+  const st = { sec: Math.max(0, Math.ceil(R.leftMs / 1000)), paused: !(T && T.state === 'aim'), score: R.score, combo: R.combo };
   const fb = game.fb && now < game.fb.until ? game.fb : null;
   if (T) {
     if (T.state === 'read') { st.cmd = T.cmd; st.prompt = `${confirmName()} 확인`; }
@@ -882,7 +886,10 @@ function loop() {
 
   if (game.phase === 'starting' && --game.startFrames <= 0) { anchorField(); showIntro(); }
   if (game.phase === 'play') {
-    if (now >= game.R.endT) endRound();
+    const R = game.R;
+    if (game.T && game.T.state === 'aim') R.leftMs -= now - R.lastT;
+    R.lastT = now;
+    if (R.leftMs <= 0) endRound();
     else if (!game.T && now >= game.nextTrialAt) newTrial(now);
   }
   if (game.phase === 'play') {
