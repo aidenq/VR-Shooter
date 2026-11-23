@@ -35,14 +35,14 @@ const DEFAULTS = {
   pid: 'P1', order: 'ABC',
   near: 0.7, focal: 1.4, target: 6,
   roundSec: 60, roundsPer: 1, practice: true, practiceSec: 30,
-  hudAngle: 20, hudDown: 10, nTargets: 4, targetAngle: 5, itiMs: 400, keepCmd: true,
+  hudAngle: 20, hudDown: 10, nTargets: 4, targetAngle: 5, itiMs: 400, keepCmd: true, hideHud: true,
 };
 const FIELDS = [
   ['pid', 'text'], ['order', 'text'],
   ['near', 'num'], ['focal', 'num'], ['target', 'num'],
   ['roundSec', 'num'], ['roundsPer', 'num'], ['practice', 'check'], ['practiceSec', 'num'],
   ['hudAngle', 'num'], ['hudDown', 'num'], ['nTargets', 'num'], ['targetAngle', 'num'],
-  ['itiMs', 'num'], ['keepCmd', 'check'],
+  ['itiMs', 'num'], ['keepCmd', 'check'], ['hideHud', 'check'],
 ];
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch { /* 저장 불가 */ } }
@@ -941,6 +941,8 @@ function loop() {
     const st = hudState(now);
     const key = JSON.stringify(st);
     if (key !== hud.key) { hud.key = key; drawHUD(st); }
+    // 확인 뒤 표적을 찾는 동안에는 HUD를 숨겨 표적을 가리지 않게 한다
+    hud.group.visible = !(S.hideHud && game.T && game.T.state === 'aim');
   }
   placeHUD();
   if (game.mode === 'vr') pollButtons();
