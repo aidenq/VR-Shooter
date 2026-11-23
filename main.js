@@ -436,15 +436,17 @@ function controllerRay(c) {
   return raycaster;
 }
 
-// A/X(4번), B/Y(5번) 버튼 = 확인
+// A/X(4번) = 확인, B/Y(5번) = 일시정지
 function pollButtons() {
   for (const c of controllers) {
     const gp = c.userData.src && c.userData.src.gamepad;
     if (!gp) continue;
     const b = gp.buttons;
-    const pressed = !!((b[4] && b[4].pressed) || (b[5] && b[5].pressed));
-    if (pressed && !c.userData.prevBtn) onConfirm();
-    c.userData.prevBtn = pressed;
+    const a = !!(b[4] && b[4].pressed), p = !!(b[5] && b[5].pressed);
+    if (a && !c.userData.prevBtn) onConfirm();
+    if (p && !c.userData.prevPause) togglePause();
+    c.userData.prevBtn = a;
+    c.userData.prevPause = p;
   }
 }
 
@@ -505,7 +507,7 @@ cvs.addEventListener('pointerleave', () => { mouse.inside = false; });
 addEventListener('keydown', (e) => {
   if (game.mode !== 'desktop') return;
   if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) onConfirm(); }
-  else if (e.code === 'Escape') abortToMenu();
+  else if (e.code === 'Escape') togglePause();
 });
 function resetDeskCamera() {
   mouse.yaw = 0; mouse.pitch = 0;
@@ -578,6 +580,7 @@ function showIntro() {
       `지령을 읽고 ${confirmName()} 확인 → 맞는 표적을 ${shootName()} 쏘기`,
       `제한 시간 ${sec}초 (지령을 읽는 동안은 멈춤) · 연속 명중은 콤보`,
       '정면을 보고, 준비되면 시작을 누르세요',
+      `일시정지: ${game.mode === 'vr' ? 'B/Y 버튼' : 'Esc'}`,
     ],
     buttons: [{ label: '시작', onClick: startRound }],
   });
@@ -739,6 +742,47 @@ function finish() {
   });
 }
 
+// 일시정지: 진행 중이던 시행은 paused=1로 기록에서 빼고, 계속하면 새 지령부터 시작한다
+function togglePause() {
+  if (game.phase === 'paused') { resumeGame(); return; }
+  if (!['intro', 'play', 'survey', 'final'].includes(game.phase)) return;
+  const from = { phase: game.phase, spec: panel.mesh.visible ? panel.spec : null };
+  if (game.phase === 'play') {
+    if (game.T) logTrial(game.T, false, true);
+    game.T = null;
+    clearTargets();
+    hud.group.visible = false;
+  }
+  game.pausedFrom = from;
+  game.phase = 'paused';
+  panel.show({
+    title: '일시정지',
+    lines: from.phase === 'play'
+      ? ['남은 시간은 멈춰 있습니다.', '계속하면 새 지령부터 시작합니다.']
+      : ['계속하면 하던 화면으로 돌아갑니다.'],
+    buttons: [
+      { label: '계속하기', onClick: resumeGame },
+      { label: game.mode === 'vr' ? 'VR 나가기' : '그만하기', onClick: abortToMenu },
+    ],
+    footerL: '지금까지 기록은 저장되어 있습니다',
+  });
+}
+function resumeGame() {
+  const from = game.pausedFrom;
+  game.pausedFrom = null;
+  game.phase = from.phase;
+  if (from.phase === 'play') {
+    panel.hide();
+    const now = performance.now();
+    game.R.lastT = now;
+    game.nextTrialAt = now + 800;
+    hud.key = '';
+    hud.group.visible = true;
+  } else if (from.spec) {
+    panel.show(from.spec);
+  }
+}
+
 // 중간에 그만두거나 끝났을 때
 function abortToMenu() {
   if (game.mode === 'vr' && game.xrSession) { game.xrSession.end(); return; } // onSessionEnd에서 이어짐
@@ -763,7 +807,7 @@ function stopGame() {
 // 기록
 // ============================================================
 const r1 = (x) => Math.round(x * 10) / 10;
-function logTrial(T, completed) {
+function logTrial(T, completed, paused = false) {
   const R = game.R;
   log.trials.push({
     session: game.sessionId, participant: S.pid, order: S.order, mode: game.mode,
@@ -777,6 +821,7 @@ function logTrial(T, completed) {
     total_ms: T.tHit ? r1(T.tHit - T.tCmd) : '',
     wrong_hits: T.wrong, misses: T.miss, early_shots: T.early,
     combo_after: R.combo, score_after: R.score, completed: completed ? 1 : 0,
+    paused: paused ? 1 : 0,
   });
   saveSession();
 }
