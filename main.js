@@ -18,15 +18,34 @@ const COLORS = [
   { k: 'green', hex: 0x2fd16f, word: '초록' },
   { k: 'yellow', hex: 0xffd21f, word: '노란' },
 ];
+// 같은 인덱스끼리 짝: 과녁 문양 s ↔ 몬스터 종류 s
 const SHAPES = [
   { k: 'circle', word: '원' },
   { k: 'square', word: '네모' },
   { k: 'triangle', word: '세모' },
   { k: 'star', word: '별' },
 ];
+const MONSTERS = [
+  { k: 'slime', word: '슬라임' },
+  { k: 'bat', word: '박쥐' },
+  { k: 'mushroom', word: '버섯' },
+  { k: 'ghost', word: '유령' },
+];
+const WEAPONS = [
+  { label: '검', locked: true },
+  { label: '활', locked: true },
+  { label: '지팡이', locked: true },
+  { label: '총', locked: false },
+];
 // 표적이 나올 수 있는 자리 (정면 기준 방위각, 올려본 각)
 const SLOTS = [];
 for (const el of [0, 12]) for (const az of [-30, -15, 0, 15, 30]) SLOTS.push({ az, el });
+
+// 판타지 색
+const UI = {
+  bg: 'rgba(30,22,14,0.94)', border: '#d9b45a', title: '#fff4dc', text: '#ecdcbc', mute: '#a8977a',
+  btn: '#4a3826', btnHover: '#a87b32', btnBorder: '#c9a24f', locked: '#2b241c',
+};
 
 // ============================================================
 // 설정
@@ -34,13 +53,13 @@ for (const el of [0, 12]) for (const az of [-30, -15, 0, 15, 30]) SLOTS.push({ a
 const DEFAULTS = {
   pid: 'P1', order: 'ABC',
   near: 0.7, focal: 1.4, target: 6,
-  roundSec: 60, roundsPer: 1, practice: true, practiceSec: 30,
+  stageKills: 12, roundsPer: 1, practice: true, practiceKills: 6, monsterKills: 3,
   hudAngle: 20, hudDown: 10, nTargets: 4, targetAngle: 5, itiMs: 400, keepCmd: true, hideHud: true,
 };
 const FIELDS = [
   ['pid', 'text'], ['order', 'text'],
   ['near', 'num'], ['focal', 'num'], ['target', 'num'],
-  ['roundSec', 'num'], ['roundsPer', 'num'], ['practice', 'check'], ['practiceSec', 'num'],
+  ['stageKills', 'num'], ['roundsPer', 'num'], ['practice', 'check'], ['practiceKills', 'num'], ['monsterKills', 'num'],
   ['hudAngle', 'num'], ['hudDown', 'num'], ['nTargets', 'num'], ['targetAngle', 'num'],
   ['itiMs', 'num'], ['keepCmd', 'check'], ['hideHud', 'check'],
 ];
@@ -67,6 +86,9 @@ function readForm() {
   }
   s.nTargets = Math.max(2, Math.min(10, Math.round(s.nTargets)));
   s.roundsPer = Math.max(1, Math.round(s.roundsPer));
+  s.stageKills = Math.max(1, Math.round(s.stageKills));
+  s.practiceKills = Math.max(1, Math.round(s.practiceKills));
+  s.monsterKills = Math.max(0, Math.round(s.monsterKills));
   if (!s.pid) s.pid = 'P';
   return s;
 }
@@ -83,8 +105,10 @@ $('stage').appendChild(renderer.domElement);
 const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b1020);
-const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 200);
+const SKY_LOW = 0xe8a46a, SKY_HIGH = 0x2a3566;
+scene.background = new THREE.Color(SKY_HIGH);
+scene.fog = new THREE.Fog(0x9a7f86, 35, 110);
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 300);
 const DESK_EYE = new THREE.Vector3(0, 1.6, 0);
 camera.position.copy(DESK_EYE);
 scene.add(camera);
@@ -95,21 +119,75 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// 바닥
+scene.add(new THREE.HemisphereLight(0xfff0d8, 0x4a5a32, 1.6));
+
+// 하늘: 노을 그라데이션 구
 {
-  const floor = new THREE.Mesh(new THREE.CircleGeometry(60, 64), new THREE.MeshBasicMaterial({ color: 0x0e152a }));
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.y = -0.01;
-  scene.add(floor);
-  scene.add(new THREE.GridHelper(100, 100, 0x2b3c6b, 0x18223f));
+  const geo = new THREE.SphereGeometry(200, 32, 16);
+  const pos = geo.attributes.position, col = [];
+  const lo = new THREE.Color(SKY_LOW), hi = new THREE.Color(SKY_HIGH), c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const t = Math.min(1, Math.max(0, pos.getY(i) / 200 * 2.2 + 0.05));
+    c.copy(lo).lerp(hi, t);
+    col.push(c.r, c.g, c.b);
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  scene.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false })));
 }
 
-// 표적 영역: 라운드 시작 때 머리 위치와 정면 방향에 맞춰 놓는다
+// 배경 소품: 스테이지 시작 때 정면 방향에 맞춰 바닥에 놓는다.
+// 표적이 나오는 정면(±50°)에는 아무것도 두지 않는다 (먼 산도 지평선 아래로 낮게).
+const decor = new THREE.Group();
+scene.add(decor);
+{
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(150, 64), new THREE.MeshLambertMaterial({ color: 0x3c5a2c }));
+  ground.rotation.x = -Math.PI / 2;
+  decor.add(ground);
+  const pad = new THREE.Mesh(new THREE.CircleGeometry(2.2, 48), new THREE.MeshLambertMaterial({ color: 0x7a5d3c }));
+  pad.rotation.x = -Math.PI / 2; pad.position.y = 0.01;
+  decor.add(pad);
+  const padRim = new THREE.Mesh(new THREE.RingGeometry(2.15, 2.35, 48), new THREE.MeshLambertMaterial({ color: 0x8c8c8c }));
+  padRim.rotation.x = -Math.PI / 2; padRim.position.y = 0.012;
+  decor.add(padRim);
+
+  const at = (az, dist, y = 0) => new THREE.Vector3(Math.sin(az * DEG) * dist, y, -Math.cos(az * DEG) * dist);
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const trunkMat = new THREE.MeshLambertMaterial({ color: 0x5a3d25 });
+  const leafMats = [0x2c5a2e, 0x24492a, 0x356b36].map((c) => new THREE.MeshLambertMaterial({ color: c }));
+  for (let i = 0; i < 40; i++) {
+    let az = rnd(60, 300); // 옆과 뒤
+    const dist = rnd(9, 32), h = rnd(3, 6);
+    const tree = new THREE.Group();
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.22, h * 0.35, 6), trunkMat);
+    trunk.position.y = h * 0.175;
+    const leaf = new THREE.Mesh(new THREE.ConeGeometry(h * 0.28, h * 0.8, 7), leafMats[i % 3]);
+    leaf.position.y = h * 0.35 + h * 0.4;
+    tree.add(trunk, leaf);
+    tree.position.copy(at(az, dist));
+    decor.add(tree);
+  }
+  const mtMat = [0x4a4566, 0x3e3a5a, 0x564d6e].map((c) => new THREE.MeshLambertMaterial({ color: c }));
+  for (let az = 0; az < 360; az += 14) {
+    const front = az < 50 || az > 310;
+    const h = front ? rnd(0.3, 0.9) : rnd(10, 22); // 정면 산은 지평선 아래
+    const m = new THREE.Mesh(new THREE.ConeGeometry(rnd(10, 16), h, 6), mtMat[Math.floor(az / 14) % 3]);
+    m.position.copy(at(az + rnd(-4, 4), rnd(80, 100), h / 2 - 0.2));
+    decor.add(m);
+  }
+}
+
+// 표적 영역: 스테이지 시작 때 머리 위치와 정면 방향에 맞춰 놓는다
 const field = new THREE.Group();
 scene.add(field);
 const markerGroup = new THREE.Group();
 const targetGroup = new THREE.Group();
 field.add(markerGroup, targetGroup);
+{
+  const sun = new THREE.DirectionalLight(0xfff1dc, 2.2);
+  sun.position.set(0.5, 4, 6); // 사용자 뒤쪽 위에서 표적 앞면을 비춘다
+  sun.target.position.set(0, 0, -6);
+  field.add(sun, sun.target);
+}
 
 const Z = new THREE.Vector3(0, 0, 1);
 function slotDir(az, el) {
@@ -125,8 +203,9 @@ function placeOnSphere(obj, az, el, D) {
 }
 const targetRadius = () => S.target * Math.tan(S.targetAngle * DEG / 2);
 
-const ringGeo = new THREE.RingGeometry(1.08, 1.16, 64);
-const ringMat = new THREE.MeshBasicMaterial({ color: 0x5f7fb8, transparent: true, opacity: 0.35 });
+// 표적 자리 표시: 희미한 마법진 고리
+const ringGeo = new THREE.RingGeometry(1.1, 1.17, 64);
+const ringMat = new THREE.MeshBasicMaterial({ color: 0xf2cf7a, transparent: true, opacity: 0.35, fog: false });
 function buildMarkers() {
   markerGroup.clear();
   const r = targetRadius();
@@ -149,11 +228,13 @@ function anchorField() {
   const h = headPose();
   field.position.copy(h.pos);
   field.rotation.set(0, h.yaw, 0);
+  decor.position.set(h.pos.x, 0, h.pos.z);
+  decor.rotation.set(0, h.yaw, 0);
   buildMarkers();
 }
 
 // ============================================================
-// 표적
+// 표적: 문양 방패 과녁 / 몬스터 (둘 다 반지름 1 단위 안에 맞춰 만든다)
 // ============================================================
 function starGeo(R, r) {
   const s = new THREE.Shape();
@@ -167,36 +248,134 @@ function starGeo(R, r) {
 }
 const GEO = {
   board: new THREE.CircleGeometry(1, 48),
-  rim: new THREE.RingGeometry(0.93, 1.0, 48),
-  circle: new THREE.CircleGeometry(0.6, 48),
-  square: new THREE.PlaneGeometry(1.0, 1.0),
-  triangle: new THREE.CircleGeometry(0.74, 3, Math.PI / 2),
-  star: starGeo(0.76, 0.32),
+  rim: new THREE.RingGeometry(0.9, 1.0, 48),
+  stud: new THREE.CircleGeometry(0.05, 12),
+  circle: new THREE.CircleGeometry(0.55, 48),
+  square: new THREE.PlaneGeometry(0.92, 0.92),
+  triangle: new THREE.CircleGeometry(0.68, 3, Math.PI / 2),
+  star: starGeo(0.7, 0.3),
+  halo: new THREE.CircleGeometry(1.18, 48),
 };
-const rimMat = new THREE.MeshBasicMaterial({ color: 0x8fa3cc });
+const woodMat = new THREE.MeshBasicMaterial({ color: 0x6b4a2b });
+const ironMat = new THREE.MeshBasicMaterial({ color: 0x9a9aa3 });
 const shapeMats = COLORS.map((c) => new THREE.MeshBasicMaterial({ color: c.hex }));
-let boards = []; // 레이 판정 대상
+const haloMat = new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.7, depthWrite: false });
+const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+let colliders = []; // 레이 판정 대상
 
-function makeTarget(spec) {
-  const g = new THREE.Group();
-  const boardMat = new THREE.MeshBasicMaterial({ color: 0x1b2337 });
-  const board = new THREE.Mesh(GEO.board, boardMat);
-  const rim = new THREE.Mesh(GEO.rim, rimMat);
-  rim.position.z = 0.04;
+function makeShield(spec, g) {
+  const board = new THREE.Mesh(GEO.board, woodMat);
+  const rim = new THREE.Mesh(GEO.rim, ironMat);
+  rim.position.z = 0.03;
+  g.add(board, rim);
+  for (let i = 0; i < 8; i++) {
+    const s = new THREE.Mesh(GEO.stud, ironMat);
+    const a = i * Math.PI / 4;
+    s.position.set(Math.cos(a) * 0.95, Math.sin(a) * 0.95, 0.05);
+    g.add(s);
+  }
   const shape = new THREE.Mesh(GEO[SHAPES[spec.s].k], shapeMats[spec.c]);
   shape.position.z = 0.08;
-  g.add(board, rim, shape);
+  g.add(shape);
+}
+
+// 몬스터 재료
+const MON = {
+  white: new THREE.MeshBasicMaterial({ color: 0xffffff }),
+  black: new THREE.MeshBasicMaterial({ color: 0x15100c }),
+  stem: new THREE.MeshLambertMaterial({ color: 0xf0e2c4 }),
+  body: COLORS.map((c) => new THREE.MeshLambertMaterial({ color: c.hex })),
+  dark: COLORS.map((c) => new THREE.MeshLambertMaterial({ color: new THREE.Color(c.hex).multiplyScalar(0.6) })),
+  eye: new THREE.SphereGeometry(0.13, 12, 8),
+  pupil: new THREE.SphereGeometry(0.065, 10, 6),
+};
+function addEyes(parent, y, z, gap = 0.2) {
+  for (const sx of [-1, 1]) {
+    const e = new THREE.Mesh(MON.eye, MON.white);
+    e.position.set(sx * gap, y, z);
+    const p = new THREE.Mesh(MON.pupil, MON.black);
+    p.position.set(sx * gap, y, z + 0.1);
+    parent.add(e, p);
+  }
+}
+// 종류마다 겉보기 크기가 방패 과녁(반지름 1)과 비슷하도록 맞춘 배율과 높이 보정
+const MON_FIT = { slime: [1.2, 0.35], bat: [1.05, 0], mushroom: [1.2, 0.15], ghost: [1.1, 0.05] };
+function makeMonster(spec, g) {
+  const body = new THREE.Group();
+  const mat = MON.body[spec.c], dark = MON.dark[spec.c];
+  const k = MONSTERS[spec.s].k;
+  if (k === 'slime') {
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(0.85, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat);
+    dome.scale.y = 0.95; dome.position.y = -0.6;
+    body.add(dome);
+    addEyes(body, -0.05, 0.62, 0.26);
+  } else if (k === 'bat') {
+    const torso = new THREE.Mesh(new THREE.SphereGeometry(0.42, 20, 14), mat);
+    body.add(torso);
+    for (const sx of [-1, 1]) {
+      const w = new THREE.Shape();
+      w.moveTo(0, 0.2); w.lineTo(sx * 0.98, 0.35); w.lineTo(sx * 0.8, 0.0); w.lineTo(sx * 0.95, -0.28); w.lineTo(0, -0.15);
+      const wing = new THREE.Mesh(new THREE.ShapeGeometry(w), dark);
+      wing.material = dark; wing.position.z = -0.05;
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.3, 6), dark);
+      ear.position.set(sx * 0.22, 0.45, 0);
+      body.add(wing, ear);
+    }
+    addEyes(body, 0.08, 0.34, 0.15);
+  } else if (k === 'mushroom') {
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.36, 0.75, 16), MON.stem);
+    stem.position.y = -0.5;
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.85, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat);
+    cap.scale.y = 0.8; cap.position.y = -0.15;
+    body.add(stem, cap);
+    for (const [x, y] of [[-0.4, 0.2], [0.35, 0.3], [0, 0.45], [0.55, 0.05], [-0.6, -0.02]]) {
+      const dot = new THREE.Mesh(new THREE.CircleGeometry(0.1, 12), MON.white);
+      dot.position.set(x, y, Math.sqrt(Math.max(0, 0.72 - x * x - (y + 0.15) ** 2 / 0.64)) + 0.05);
+      body.add(dot);
+    }
+    addEyes(body, -0.45, 0.33, 0.13);
+  } else { // ghost
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.55, 20, 14), mat);
+    head.position.y = 0.2;
+    const skirt = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.62, 0.6, 20, 1, true), mat);
+    skirt.position.y = -0.1;
+    body.add(head, skirt);
+    for (const x of [-0.4, 0, 0.4]) {
+      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.4, 8), mat);
+      tail.rotation.x = Math.PI; tail.position.set(x, -0.6, 0);
+      body.add(tail);
+    }
+    addEyes(body, 0.25, 0.5, 0.2);
+  }
+  const [sc, dy] = MON_FIT[k];
+  const fit = new THREE.Group(); // 크기·높이 보정
+  fit.scale.setScalar(sc); fit.position.y = dy * sc;
+  fit.add(body);
+  g.add(fit);
+  g.userData.body = body; // 둥실거림은 body에만
+  g.userData.phase = Math.random() * Math.PI * 2;
+}
+
+function makeTarget(spec, kind) {
+  const g = new THREE.Group();
+  const halo = new THREE.Mesh(GEO.halo, haloMat);
+  halo.position.z = -0.15; halo.visible = false;
+  const hit = new THREE.Mesh(GEO.board, hitMat); // 판정용 (보이지 않음)
+  hit.position.z = 0.2;
+  g.add(halo, hit);
+  if (kind === 'monster') makeMonster(spec, g); else makeShield(spec, g);
   g.scale.setScalar(targetRadius());
   placeOnSphere(g, spec.az, spec.el, S.target);
-  g.userData = { spec, boardMat };
-  board.userData.target = g;
-  boards.push(board);
+  g.userData.spec = spec;
+  g.userData.halo = halo;
+  hit.userData.target = g;
+  colliders.push(hit);
   targetGroup.add(g);
   return g;
 }
 function clearTargets() {
   targetGroup.clear();
-  boards = [];
+  colliders = [];
 }
 
 const ri = (n) => Math.floor(Math.random() * n);
@@ -204,7 +383,7 @@ function shuffle(a) {
   for (let i = a.length - 1; i > 0; i--) { const j = ri(i + 1); [a[i], a[j]] = [a[j], a[i]]; }
   return a;
 }
-// 정답 하나 + 색만 같은 것 + 모양만 같은 것 + 나머지 무작위 (모두 다른 조합)
+// 정답 하나 + 색만 같은 것 + 모양(종류)만 같은 것 + 나머지 무작위 (모두 다른 조합)
 function genTargets(n) {
   const c0 = ri(4), s0 = ri(4);
   const items = [{ c: c0, s: s0, correct: true }];
@@ -220,7 +399,31 @@ function genTargets(n) {
   const slots = shuffle(SLOTS.slice()).slice(0, n);
   return items.map((it, i) => ({ ...it, az: slots[i].az, el: slots[i].el }));
 }
-const cmdOf = (spec) => COLORS[spec.c].word + ' ' + SHAPES[spec.s].word;
+const cmdOf = (spec, kind) => COLORS[spec.c].word + ' ' + (kind === 'monster' ? MONSTERS : SHAPES)[spec.s].word;
+
+// ============================================================
+// 총 (VR 컨트롤러에 붙는다)
+// ============================================================
+function makeGun() {
+  const g = new THREE.Group();
+  const metal = new THREE.MeshLambertMaterial({ color: 0x3b3b42 });
+  const brass = new THREE.MeshLambertMaterial({ color: 0xb8893a });
+  const wood = new THREE.MeshLambertMaterial({ color: 0x6b4426 });
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.014, 0.2, 10), metal);
+  barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0, -0.1);
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.02, 10), brass);
+  band.rotation.x = Math.PI / 2; band.position.set(0, 0, -0.17);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.04, 0.09), brass);
+  body.position.set(0, -0.012, 0.01);
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.1, 0.035), wood);
+  grip.position.set(0, -0.065, 0.05); grip.rotation.x = -0.35;
+  const flash = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.95 }));
+  flash.position.set(0, 0, -0.22); flash.visible = false;
+  g.add(barrel, band, body, grip, flash);
+  g.userData.flash = flash;
+  return g;
+}
 
 // ============================================================
 // 캔버스 글자 도우미
@@ -242,14 +445,21 @@ function canvasTexture(w, h) {
   tex.anisotropy = MAX_ANISO;
   return { canvas, ctx: canvas.getContext('2d'), tex };
 }
+function frame(c, W, H, r) {
+  roundRect(c, 8, 8, W - 16, H - 16, r);
+  c.fillStyle = UI.bg; c.fill();
+  c.lineWidth = 5; c.strokeStyle = UI.border; c.stroke();
+  roundRect(c, 20, 20, W - 40, H - 40, r - 10);
+  c.lineWidth = 2; c.strokeStyle = 'rgba(217,180,90,0.45)'; c.stroke();
+}
 
 // ============================================================
-// HUD: 머리를 따라다니고, 시선 아래 hudDown°, 시각각 hudAngle°로 크기 고정
+// HUD (퀘스트 창): 머리를 따라다니고, 시선 아래 hudDown°, 시각각 hudAngle°로 크기 고정
 // ============================================================
 const hud = (() => {
   const { canvas, ctx, tex } = canvasTexture(1024, 512);
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 0.5),
-    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false }));
   mesh.renderOrder = 999;
   const group = new THREE.Group();
   group.add(mesh);
@@ -270,21 +480,16 @@ function setHudDistance(d) {
 function drawHUD(st) {
   const c = hud.ctx, W = 1024, H = 512;
   c.clearRect(0, 0, W, H);
-  roundRect(c, 10, 10, W - 20, H - 20, 40);
-  c.fillStyle = 'rgba(8,12,24,0.82)'; c.fill();
-  c.lineWidth = 5; c.strokeStyle = 'rgba(110,160,255,0.7)'; c.stroke();
+  frame(c, W, H, 40);
   c.textBaseline = 'middle';
-  c.font = `700 44px ${FONT}`; c.fillStyle = '#bcd0ff';
-  c.textAlign = 'left';
-  c.fillStyle = st.paused ? '#6b7899' : '#ffd36b'; // 멈춰 있을 때는 흐리게
-  c.fillText(`남은 시간 ${st.sec}`, 50, 72);
-  c.fillStyle = '#bcd0ff';
-  c.textAlign = 'center'; c.fillText(`점수 ${st.score}`, W / 2 + 40, 72);
-  c.textAlign = 'right'; c.fillText(`콤보 ${st.combo}`, W - 50, 72);
+  c.font = `700 42px ${FONT}`; c.fillStyle = UI.text;
+  c.textAlign = 'left'; c.fillText(`처치 ${st.kills} / ${st.goal}`, 56, 76);
+  c.textAlign = 'center'; c.fillText(`EXP ${st.score}`, W / 2 + 30, 76);
+  c.textAlign = 'right'; c.fillText(`콤보 ${st.combo}`, W - 56, 76);
   if (st.cmd) {
     c.textAlign = 'center';
     c.font = `900 150px ${FONT}`;
-    c.fillStyle = st.cmdDim ? 'rgba(255,255,255,0.4)' : '#ffffff';
+    c.fillStyle = st.cmdDim ? 'rgba(255,244,220,0.4)' : UI.title;
     c.fillText(st.cmd, W / 2, 262);
   }
   if (st.prompt) {
@@ -303,13 +508,13 @@ function placeHUD() {
 }
 
 // ============================================================
-// 월드 패널 (안내, 설문)
+// 월드 패널 (안내, 무기 선택, 설문)
 // ============================================================
 const panel = (() => {
   const W = 1024, H = 640;
   const { canvas, ctx, tex } = canvasTexture(W, H);
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.2 * H / W),
-    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false }));
   mesh.renderOrder = 1000;
   mesh.visible = false;
   scene.add(mesh);
@@ -318,7 +523,7 @@ const panel = (() => {
   p.show = (spec) => {
     p.spec = spec; p.hover = -1;
     const b = spec.buttons || [];
-    const n = b.length, pad = 48, gap = 16, bh = 110;
+    const n = b.length, pad = 48, gap = 16, bh = b.some((x) => x.sub) ? 130 : 110;
     const y = H - pad - bh - (spec.footerL || spec.footerR ? 44 : 0);
     const bw = Math.min(360, (W - 2 * pad - gap * (n - 1)) / n);
     let x = (W - (bw * n + gap * (n - 1))) / 2;
@@ -331,23 +536,26 @@ const panel = (() => {
   p.draw = () => {
     const c = ctx, s = p.spec;
     c.clearRect(0, 0, W, H);
-    roundRect(c, 8, 8, W - 16, H - 16, 36);
-    c.fillStyle = 'rgba(14,20,38,0.94)'; c.fill();
-    c.lineWidth = 4; c.strokeStyle = 'rgba(110,160,255,0.6)'; c.stroke();
+    frame(c, W, H, 36);
     c.textBaseline = 'middle'; c.textAlign = 'center';
-    c.fillStyle = '#ffffff'; c.font = `900 60px ${FONT}`;
-    c.fillText(s.title || '', W / 2, 92);
-    c.font = `500 36px ${FONT}`; c.fillStyle = '#c9d6ff';
-    (s.lines || []).forEach((ln, i) => c.fillText(ln, W / 2, 178 + i * 54));
+    c.fillStyle = UI.title; c.font = `900 58px ${FONT}`;
+    c.fillText(s.title || '', W / 2, 96);
+    c.font = `500 35px ${FONT}`; c.fillStyle = UI.text;
+    (s.lines || []).forEach((ln, i) => c.fillText(ln, W / 2, 180 + i * 52));
     (s.buttons || []).forEach((b, i) => {
       const r = p.rects[i];
       roundRect(c, r.x, r.y, r.w, r.h, 22);
-      c.fillStyle = i === p.hover ? '#4f7cff' : '#28335a'; c.fill();
-      c.lineWidth = 3; c.strokeStyle = '#6d8fe0'; c.stroke();
-      c.fillStyle = '#ffffff'; c.font = `700 ${b.label.length > 4 ? 38 : 48}px ${FONT}`;
-      c.fillText(b.label, r.x + r.w / 2, r.y + r.h / 2 + 2);
+      c.fillStyle = b.disabled ? UI.locked : i === p.hover ? UI.btnHover : UI.btn; c.fill();
+      c.lineWidth = 3; c.strokeStyle = b.disabled ? '#5a4c38' : UI.btnBorder; c.stroke();
+      c.fillStyle = b.disabled ? '#7d705c' : '#ffffff';
+      c.font = `700 ${b.label.length > 4 ? 38 : 48}px ${FONT}`;
+      c.fillText(b.label, r.x + r.w / 2, r.y + (b.sub ? 48 : r.h / 2 + 2));
+      if (b.sub) {
+        c.font = `500 28px ${FONT}`; c.fillStyle = b.disabled ? '#7d705c' : '#f7dfa6';
+        c.fillText(b.sub, r.x + r.w / 2, r.y + 96);
+      }
     });
-    c.font = `500 30px ${FONT}`; c.fillStyle = '#8d9bc4';
+    c.font = `500 30px ${FONT}`; c.fillStyle = UI.mute;
     if (s.footerL) { c.textAlign = 'left'; c.fillText(s.footerL, 56, H - 46); }
     if (s.footerR) { c.textAlign = 'right'; c.fillText(s.footerR, W - 56, H - 46); }
     tex.needsUpdate = true;
@@ -356,10 +564,16 @@ const panel = (() => {
     const x = uv.x * W, y = (1 - uv.y) * H;
     return p.rects.findIndex((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
   };
-  p.setHover = (i) => { if (p.spec && i !== p.hover) { p.hover = i; p.draw(); } };
+  p.setHover = (i) => {
+    if (p.spec && p.spec.buttons && p.spec.buttons[i] && p.spec.buttons[i].disabled) i = -1;
+    if (p.spec && i !== p.hover) { p.hover = i; p.draw(); }
+  };
   p.click = (i) => {
     const b = p.spec && p.spec.buttons && p.spec.buttons[i];
-    if (b) { beep(880, 0.05, 'sine', 0.1); b.onClick(); }
+    if (!b) return;
+    if (b.disabled) { beep(180, 0.12, 'square', 0.05); if (b.onLocked) b.onLocked(); return; }
+    beep(880, 0.05, 'sine', 0.1);
+    b.onClick();
   };
   return p;
 })();
@@ -375,9 +589,16 @@ function placePanel() {
 // ============================================================
 // 소리
 // ============================================================
-let actx = null;
+let actx = null, noiseBuf = null;
 function initAudio() {
-  try { actx = actx || new AudioContext(); actx.resume(); } catch { actx = null; }
+  try {
+    actx = actx || new AudioContext(); actx.resume();
+    if (!noiseBuf) {
+      noiseBuf = actx.createBuffer(1, actx.sampleRate * 0.25, actx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+  } catch { actx = null; }
 }
 function beep(freq, dur = 0.08, type = 'sine', vol = 0.12) {
   if (!actx) return;
@@ -388,6 +609,15 @@ function beep(freq, dur = 0.08, type = 'sine', vol = 0.12) {
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   o.connect(g).connect(actx.destination);
   o.start(t); o.stop(t + dur + 0.02);
+}
+function bang() {
+  if (!actx || !noiseBuf) return;
+  const t = actx.currentTime;
+  const src = actx.createBufferSource(); src.buffer = noiseBuf;
+  const f = actx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(2400, t); f.frequency.exponentialRampToValueAtTime(300, t + 0.18);
+  const g = actx.createGain(); g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+  src.connect(f).connect(g).connect(actx.destination);
+  src.start(t); src.stop(t + 0.22);
 }
 
 // ============================================================
@@ -402,7 +632,7 @@ function castScene(rc) {
     const h = rc.intersectObject(panel.mesh, false)[0];
     if (h) return { kind: 'panel', dist: h.distance, point: h.point, uv: h.uv };
   }
-  const t = rc.intersectObjects(boards, false)[0];
+  const t = rc.intersectObjects(colliders, false)[0];
   if (t) return { kind: 'target', dist: t.distance, point: t.point, obj: t.object.userData.target };
   return null;
 }
@@ -411,21 +641,20 @@ const laserGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 
 const controllers = [];
 for (let i = 0; i < 2; i++) {
   const c = renderer.xr.getController(i);
-  const line = new THREE.Line(laserGeo, new THREE.LineBasicMaterial({ color: 0x66ddff }));
+  const line = new THREE.Line(laserGeo, new THREE.LineBasicMaterial({ color: 0xffc46b, transparent: true, opacity: 0.7, fog: false }));
   line.scale.z = 10;
-  const tip = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 0.08), new THREE.MeshBasicMaterial({ color: 0x8899bb }));
-  tip.position.z = 0.03;
-  c.add(line, tip);
+  const gun = makeGun();
+  c.add(line, gun);
   const dot = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8),
-    new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }));
+    new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, fog: false }));
   dot.renderOrder = 1001;
   dot.visible = false;
   scene.add(dot);
-  c.userData = { line, dot, src: null, prevBtn: false };
+  c.userData = { line, dot, gun, src: null, prevBtn: false, prevPause: false };
   c.visible = false;
   c.addEventListener('connected', (e) => { c.userData.src = e.data; c.visible = !e.data.hand; });
   c.addEventListener('disconnected', () => { c.userData.src = null; c.visible = false; dot.visible = false; });
-  c.addEventListener('selectstart', () => { if (c.visible) onShoot(controllerRay(c)); });
+  c.addEventListener('selectstart', () => { if (c.visible) onShoot(controllerRay(c), c); });
   scene.add(c);
   controllers.push(c);
 }
@@ -457,7 +686,7 @@ function updateRays() {
       if (!c.visible) continue;
       const res = castScene(controllerRay(c));
       c.userData.line.scale.z = res ? res.dist : 10;
-      c.userData.line.material.color.set(res && res.kind === 'target' ? 0xffffff : 0x66ddff);
+      c.userData.line.material.color.set(res && res.kind === 'target' ? 0xffffff : 0xffc46b);
       const dot = c.userData.dot;
       dot.visible = !!res;
       if (res) { dot.position.copy(res.point); dot.scale.setScalar(Math.max(0.004, res.dist * 0.004)); }
@@ -501,7 +730,7 @@ cvs.addEventListener('pointerup', (e) => {
   if (!d || d.drag || game.mode !== 'desktop') return;
   setNdc(e);
   raycaster.setFromCamera(mouse.ndc, camera);
-  onShoot(raycaster);
+  onShoot(raycaster, null);
 });
 cvs.addEventListener('pointerleave', () => { mouse.inside = false; });
 addEventListener('keydown', (e) => {
@@ -515,12 +744,16 @@ function resetDeskCamera() {
   camera.rotation.set(0, 0, 0, 'YXZ');
 }
 
-function onShoot(rc) {
+function onShoot(rc, ctrl) {
   if (!game.mode) return;
   const res = castScene(rc);
   if (panel.mesh.visible) {
     if (res && res.kind === 'panel') panel.click(panel.pick(res.uv));
     return;
+  }
+  if (game.phase === 'play' && game.T && game.T.state === 'aim') {
+    bang();
+    if (ctrl) recoil(ctrl.userData.gun, performance.now());
   }
   if (game.phase === 'play') shoot(res);
 }
@@ -534,9 +767,9 @@ function onConfirm() {
 // ============================================================
 const game = {
   mode: null,      // 'vr' | 'desktop' | null
-  phase: 'idle',   // idle | starting | intro | play | survey | final | done
+  phase: 'idle',   // idle | starting | weapon | intro | play | clear | survey | final | done | paused
   rounds: [], ri: 0, R: null, T: null, nextTrialAt: 0,
-  sessionId: '', fb: null, lastCmd: '', startFrames: 0, xrSession: null,
+  sessionId: '', fb: null, lastCmd: '', startFrames: 0, xrSession: null, pausedFrom: null,
 };
 let log = { trials: [], rounds: [], prefs: null };
 
@@ -544,9 +777,11 @@ function stamp() {
   const d = new Date(), p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
-const confirmName = () => (game.mode === 'vr' ? 'A/X 버튼으로' : 'Space로');
-const shootName = () => (game.mode === 'vr' ? '방아쇠로' : '클릭해서');
+const confirmKey = () => (game.mode === 'vr' ? 'A/X 버튼' : 'Space');
+const shootKey = () => (game.mode === 'vr' ? '방아쇠' : '클릭');
+const pauseKey = () => (game.mode === 'vr' ? 'B/Y 버튼' : 'Esc');
 const hudDistOf = (cond) => (cond === 'A' ? S.near : cond === 'B' ? S.focal : S.target);
+const stageName = (r) => (r.practice ? '기초 훈련' : `훈련 ${r.pos}단계`);
 
 function startSession(mode) {
   S = readForm();
@@ -555,9 +790,11 @@ function startSession(mode) {
   game.sessionId = stamp();
   log = { trials: [], rounds: [], prefs: null };
   const rounds = [];
-  if (S.practice) rounds.push({ practice: true, cond: 'B', pos: 0 });
+  if (S.practice) rounds.push({ practice: true, cond: 'B', pos: 0, goal: S.practiceKills, monsters: Math.min(S.monsterKills, 2) });
   let pos = 0;
-  for (let r = 0; r < S.roundsPer; r++) for (const ch of S.order) rounds.push({ practice: false, cond: ch, pos: ++pos });
+  for (let r = 0; r < S.roundsPer; r++) {
+    for (const ch of S.order) rounds.push({ practice: false, cond: ch, pos: ++pos, goal: S.stageKills, monsters: Math.min(S.monsterKills, S.stageKills) });
+  }
   game.rounds = rounds;
   game.ri = 0;
   game.lastCmd = '';
@@ -568,20 +805,45 @@ function startSession(mode) {
   game.startFrames = 3; // VR 첫 프레임의 머리 위치를 받은 뒤 안내판을 띄운다
 }
 
+function showWeapons(msg) {
+  game.phase = 'weapon';
+  panel.show({
+    title: '무기를 고르세요',
+    lines: [msg || '모험을 떠나기 전에 쓸 무기를 하나 고릅니다.'],
+    buttons: WEAPONS.map((w) => ({
+      label: w.label, sub: w.locked ? '잠김' : '선택 가능', disabled: w.locked,
+      onLocked: () => showWeapons('아직 열리지 않은 무기입니다. 총을 골라 보세요.'),
+      onClick: () => {
+        panel.show({
+          title: '총을 골랐습니다',
+          lines: ['멀리 있는 적을 한 발씩 정확하게 노리는 무기.', '훈련장에서 쓰는 법을 익혀 봅시다.'],
+          buttons: [{ label: '훈련장으로', onClick: showIntro }],
+        });
+      },
+    })),
+  });
+}
+
 function showIntro() {
   game.phase = 'intro';
   hud.group.visible = false;
   const r = game.rounds[game.ri];
   const total = game.rounds.filter((x) => !x.practice).length;
-  const sec = r.practice ? S.practiceSec : S.roundSec;
+  const lines = r.practice
+    ? [
+      '교관: 퀘스트 창에 목표가 뜨면 읽어라.',
+      `읽었으면 ${confirmKey()}, 나타난 적 중 목표를 ${shootKey()}!`,
+      `목표 ${r.goal}개를 맞히면 끝. 마지막엔 몬스터도 나온다.`,
+      `일시정지: ${pauseKey()}`,
+    ]
+    : [
+      `목표 ${r.goal}개 처치 · 마지막 ${r.monsters}개는 몬스터`,
+      '연속으로 맞히면 콤보 경험치!',
+      '정면을 보고, 준비되면 시작을 누르세요.',
+    ];
   panel.show({
-    title: r.practice ? '연습 판' : `${r.pos} / ${total}번째 판`,
-    lines: [
-      `지령을 읽고 ${confirmName()} 확인 → 맞는 표적을 ${shootName()} 쏘기`,
-      `제한 시간 ${sec}초 (지령을 읽는 동안은 멈춤) · 연속 명중은 콤보`,
-      '정면을 보고, 준비되면 시작을 누르세요',
-      `일시정지: ${game.mode === 'vr' ? 'B/Y 버튼' : 'Esc'}`,
-    ],
+    title: r.practice ? '기초 훈련' : `훈련 ${r.pos} / ${total}단계`,
+    lines,
     buttons: [{ label: '시작', onClick: startRound }],
   });
 }
@@ -593,9 +855,7 @@ function startRound() {
   const d = hudDistOf(r.cond);
   setHudDistance(d);
   const now = performance.now();
-  const sec = r.practice ? S.practiceSec : S.roundSec;
-  // 남은 시간은 표적을 찾아 쏘는 동안(확인 → 명중)에만 줄어든다
-  game.R = { ...r, hudDist: d, sec, startT: now, leftMs: sec * 1000, lastT: now,
+  game.R = { ...r, hudDist: d, startT: now,
     score: 0, combo: 0, maxCombo: 0, hits: 0, wrongs: 0, misses: 0, n: 0 };
   game.T = null;
   game.fb = null;
@@ -606,11 +866,13 @@ function startRound() {
 }
 
 function newTrial(now) {
+  const R = game.R;
+  const kind = R.hits >= R.goal - R.monsters ? 'monster' : 'symbol';
   let specs;
-  do { specs = genTargets(S.nTargets); } while (cmdOf(specs[0]) === game.lastCmd);
-  game.lastCmd = cmdOf(specs[0]);
-  game.R.n++;
-  game.T = { n: game.R.n, specs, cmd: cmdOf(specs[0]), state: 'read',
+  do { specs = genTargets(S.nTargets); } while (cmdOf(specs[0], kind) === game.lastCmd);
+  game.lastCmd = cmdOf(specs[0], kind);
+  R.n++;
+  game.T = { n: R.n, kind, specs, cmd: cmdOf(specs[0], kind), state: 'read',
     tCmd: now, tConfirm: 0, tHit: 0, wrong: 0, miss: 0, early: 0 };
 }
 
@@ -619,7 +881,7 @@ function confirmCmd() {
   if (!T || T.state !== 'read') return;
   T.tConfirm = performance.now();
   T.state = 'aim';
-  for (const s of T.specs) makeTarget(s);
+  for (const s of T.specs) makeTarget(s, T.kind);
   beep(660, 0.04, 'triangle', 0.06);
 }
 
@@ -629,26 +891,22 @@ function shoot(res) {
   if (T.state === 'read') { T.early++; return; }
   if (T.state !== 'aim') return;
   const now = performance.now();
-  if (!res || res.kind !== 'target') {
-    T.miss++; R.misses++;
-    beep(220, 0.05, 'square', 0.03);
-    return;
-  }
+  if (!res || res.kind !== 'target') { T.miss++; R.misses++; return; }
   const g = res.obj;
   if (g.userData.spec.correct) {
     T.tHit = now; T.state = 'done';
     R.combo++; R.maxCombo = Math.max(R.maxCombo, R.combo); R.hits++;
     const gain = 100 + 20 * Math.min(R.combo - 1, 10);
     R.score += gain;
-    game.fb = { text: `명중! +${gain}`, color: '#7dffa8', until: now + 700 };
-    beep(988, 0.09, 'sine', 0.14);
+    game.fb = { text: `${T.kind === 'monster' ? '처치!' : '명중!'} +${gain} EXP`, color: '#9dffb0', until: now + 700 };
+    beep(988, 0.09, 'sine', 0.12);
     popAndClear(g, now);
     logTrial(T, true);
     game.T = null;
     game.nextTrialAt = now + S.itiMs;
   } else {
     T.wrong++; R.wrongs++; R.combo = 0;
-    game.fb = { text: '틀렸어요!', color: '#ff7b7b', until: now + 600 };
+    game.fb = { text: '목표가 아니에요!', color: '#ff8b7b', until: now + 600 };
     beep(160, 0.15, 'sawtooth', 0.06);
     flash(g, now);
   }
@@ -658,44 +916,68 @@ function shoot(res) {
 const fx = [];
 function popAndClear(hit, now) {
   for (const g of [...targetGroup.children]) if (g !== hit) targetGroup.remove(g);
-  boards = [];
-  fx.push({ obj: hit, t0: now, dur: 160, base: hit.scale.x, kind: 'pop' });
+  colliders = [];
+  fx.push({ obj: hit, t0: now, dur: 180, base: hit.scale.x, kind: 'pop' });
 }
 function flash(g, now) {
-  g.userData.boardMat.color.set(0xaa2222);
-  fx.push({ obj: g, t0: now, dur: 250, kind: 'flash' });
+  g.userData.halo.visible = true;
+  fx.push({ obj: g, t0: now, dur: 280, kind: 'flash' });
+}
+function recoil(gun, now) {
+  if (!gun) return;
+  gun.userData.flash.visible = true;
+  fx.push({ obj: gun, t0: now, dur: 130, kind: 'recoil' });
 }
 function updateFx(now) {
   for (let i = fx.length - 1; i >= 0; i--) {
-    const f = fx[i], k = (now - f.t0) / f.dur;
+    const f = fx[i], k = Math.min(1, (now - f.t0) / f.dur);
     if (f.kind === 'pop') {
-      f.obj.scale.setScalar(f.base * (1 + 0.6 * Math.min(k, 1)));
+      f.obj.scale.setScalar(f.base * (1 + 0.6 * k));
       if (k >= 1) targetGroup.remove(f.obj);
-    } else if (k >= 1) {
-      f.obj.userData.boardMat.color.set(0x1b2337);
+    } else if (f.kind === 'flash') {
+      if (k >= 1) f.obj.userData.halo.visible = false;
+    } else if (f.kind === 'recoil') {
+      f.obj.rotation.x = 0.35 * (1 - k);
+      if (k > 0.4) f.obj.userData.flash.visible = false;
     }
     if (k >= 1) fx.splice(i, 1);
+  }
+  // 몬스터는 살짝 둥실거린다
+  for (const g of targetGroup.children) {
+    const b = g.userData.body;
+    if (b) b.position.y = Math.sin(now / 280 + g.userData.phase) * 0.05;
   }
 }
 
 function endRound() {
-  if (game.T) logTrial(game.T, false); // 시간이 다 돼 끝나지 못한 시행
   game.T = null;
   clearTargets();
   hud.group.visible = false;
-  beep(523, 0.3, 'sine', 0.1);
+  beep(523, 0.15, 'sine', 0.1);
+  setTimeout(() => beep(784, 0.25, 'sine', 0.1), 150);
   const R = game.R;
-  if (R.practice) { game.ri++; nextOrFinish(); return; }
-  game.phase = 'survey';
-  const title = `${R.pos}번째 판 끝! 점수 ${R.score}`;
-  askScale(title, '지금 눈이 얼마나 피로한가요?', (eye) => {
-    R.eye = eye;
-    askScale(title, '지금 얼마나 어지러운가요?', (dz) => {
-      R.dizzy = dz;
-      logRound(R);
-      game.ri++;
-      nextOrFinish();
-    });
+  R.wallSec = r1((performance.now() - R.startT) / 1000);
+  game.phase = 'clear';
+  panel.show({
+    title: `${stageName(R)} 클리어!`,
+    lines: [`걸린 시간 ${Math.round(R.wallSec)}초 · EXP ${R.score}`, `최대 콤보 ${R.maxCombo} · 빗나간 사격 ${R.wrongs + R.misses}`],
+    buttons: [{
+      label: R.practice ? '다음으로' : '모닥불에서 쉬기',
+      onClick: () => {
+        if (R.practice) { game.ri++; nextOrFinish(); return; }
+        game.phase = 'survey';
+        const title = '모닥불에서 쉬는 중';
+        askScale(title, '지금 눈이 얼마나 피로한가요?', (eye) => {
+          R.eye = eye;
+          askScale(title, '지금 얼마나 어지러운가요?', (dz) => {
+            R.dizzy = dz;
+            logRound(R);
+            game.ri++;
+            nextOrFinish();
+          });
+        });
+      },
+    }],
   });
 }
 function askScale(title, q, cb) {
@@ -713,12 +995,12 @@ function askFinals() {
   game.phase = 'final';
   const seen = [];
   for (const r of game.rounds) if (!r.practice && !seen.includes(r.cond)) seen.push(r.cond);
-  const btns = (cb) => seen.map((c, i) => ({ label: `${i + 1}번째 판`, onClick: () => cb(c) }));
+  const btns = (cb) => seen.map((c, i) => ({ label: `${i + 1}단계`, onClick: () => cb(c) }));
   panel.show({
-    title: '마지막 질문 (1/2)', lines: ['어느 판에서 눈이 가장 편했나요?'],
+    title: '마지막 질문 (1/2)', lines: ['어느 단계에서 눈이 가장 편했나요?'],
     buttons: btns((c1) => {
       panel.show({
-        title: '마지막 질문 (2/2)', lines: ['어느 판이 가장 하기 좋았나요?'],
+        title: '마지막 질문 (2/2)', lines: ['어느 단계가 가장 하기 좋았나요?'],
         buttons: btns((c2) => {
           for (const row of log.rounds) {
             row.pref_comfort = row.cond === c1 ? 1 : 0;
@@ -735,17 +1017,20 @@ function askFinals() {
 function finish() {
   game.phase = 'done';
   saveSession();
+  beep(659, 0.12, 'sine', 0.1);
+  setTimeout(() => beep(880, 0.12, 'sine', 0.1), 130);
+  setTimeout(() => beep(1175, 0.3, 'sine', 0.1), 260);
   panel.show({
-    title: '끝! 수고하셨습니다',
-    lines: ['결과가 저장되었습니다.', game.mode === 'vr' ? '버튼을 누르면 VR에서 나갑니다.' : '버튼을 누르면 메뉴로 돌아갑니다.'],
+    title: '튜토리얼 완료! 레벨 업',
+    lines: ['총잡이의 기본기를 익혔습니다.', '이제 진짜 모험을 떠날 수 있어요.', '(기록이 저장되었습니다)'],
     buttons: [{ label: game.mode === 'vr' ? 'VR 나가기' : '메뉴로', onClick: abortToMenu }],
   });
 }
 
-// 일시정지: 진행 중이던 시행은 paused=1로 기록에서 빼고, 계속하면 새 지령부터 시작한다
+// 일시정지: 진행 중이던 시행은 paused=1로 기록에서 빼고, 계속하면 새 목표부터 시작한다
 function togglePause() {
   if (game.phase === 'paused') { resumeGame(); return; }
-  if (!['intro', 'play', 'survey', 'final'].includes(game.phase)) return;
+  if (!['weapon', 'intro', 'play', 'clear', 'survey', 'final'].includes(game.phase)) return;
   const from = { phase: game.phase, spec: panel.mesh.visible ? panel.spec : null };
   if (game.phase === 'play') {
     if (game.T) logTrial(game.T, false, true);
@@ -757,9 +1042,7 @@ function togglePause() {
   game.phase = 'paused';
   panel.show({
     title: '일시정지',
-    lines: from.phase === 'play'
-      ? ['남은 시간은 멈춰 있습니다.', '계속하면 새 지령부터 시작합니다.']
-      : ['계속하면 하던 화면으로 돌아갑니다.'],
+    lines: from.phase === 'play' ? ['계속하면 새 목표부터 시작합니다.'] : ['계속하면 하던 화면으로 돌아갑니다.'],
     buttons: [
       { label: '계속하기', onClick: resumeGame },
       { label: game.mode === 'vr' ? 'VR 나가기' : '그만하기', onClick: abortToMenu },
@@ -773,9 +1056,7 @@ function resumeGame() {
   game.phase = from.phase;
   if (from.phase === 'play') {
     panel.hide();
-    const now = performance.now();
-    game.R.lastT = now;
-    game.nextTrialAt = now + 800;
+    game.nextTrialAt = performance.now() + 800;
     hud.key = '';
     hud.group.visible = true;
   } else if (from.spec) {
@@ -813,7 +1094,7 @@ function logTrial(T, completed, paused = false) {
     session: game.sessionId, participant: S.pid, order: S.order, mode: game.mode,
     fps: (game.xrSession && game.xrSession.frameRate) || '',
     practice: R.practice ? 1 : 0, round_pos: R.pos, cond: R.cond, cond_name: COND[R.cond].name,
-    hud_dist_m: R.hudDist, target_dist_m: S.target, trial: T.n, command: T.cmd,
+    hud_dist_m: R.hudDist, target_dist_m: S.target, trial: T.n, target_kind: T.kind, command: T.cmd,
     target_az_deg: T.specs[0].az, target_el_deg: T.specs[0].el,
     t_in_round_ms: r1(T.tCmd - R.startT),
     read_ms: T.tConfirm ? r1(T.tConfirm - T.tCmd) : '',
@@ -829,7 +1110,8 @@ function logRound(R) {
   log.rounds.push({
     session: game.sessionId, participant: S.pid, order: S.order, mode: game.mode,
     round_pos: R.pos, cond: R.cond, cond_name: COND[R.cond].name, hud_dist_m: R.hudDist,
-    round_sec: R.sec, wall_sec: r1((performance.now() - R.startT) / 1000), hits: R.hits, wrong_hits: R.wrongs, misses: R.misses,
+    goal: R.goal, monster_trials: R.monsters, wall_sec: R.wallSec,
+    hits: R.hits, wrong_hits: R.wrongs, misses: R.misses,
     score: R.score, max_combo: R.maxCombo, eye_fatigue: R.eye, dizziness: R.dizzy,
     pref_comfort: '', pref_play: '',
   });
@@ -866,7 +1148,6 @@ function download(name, text) {
 
 // 조건별 요약 (연습 제외, 끝낸 시행만)
 const median = (a) => { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
-const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : NaN);
 const fmt = (x) => (Number.isFinite(x) ? Math.round(x) : '–');
 function summaryHTML(sess) {
   const tr = sess.log.trials.filter((t) => !t.practice && t.completed);
@@ -879,7 +1160,7 @@ function summaryHTML(sess) {
       <td>${rd.length ? rd.map((r) => r.eye_fatigue).join('/') : '–'}</td>
       <td>${rd.length ? rd.map((r) => r.dizziness).join('/') : '–'}</td></tr>`;
   }).join('');
-  const pref = sess.log.prefs ? `<p class="note">가장 편했던 판: ${sess.log.prefs.comfort} · 가장 하기 좋았던 판: ${sess.log.prefs.play}</p>` : '';
+  const pref = sess.log.prefs ? `<p class="note">가장 편했던 단계: ${sess.log.prefs.comfort} · 가장 하기 좋았던 단계: ${sess.log.prefs.play}</p>` : '';
   return `<p class="note">${sess.settings.pid} · 순서 ${sess.settings.order} · ${sess.sessionId}</p>
     <table><thead><tr><th>조건</th><th>시행</th><th>읽기 중앙값(ms)</th><th>조준 중앙값(ms)</th><th>오답</th><th>눈 피로</th><th>어지러움</th></tr></thead>
     <tbody>${rows}</tbody></table>${pref}`;
@@ -897,7 +1178,7 @@ function renderHistory() {
       <div class="meta"><b>${s.settings.pid}</b> · ${s.settings.order} · ${s.mode === 'vr' ? 'VR' : '브라우저'} · ${s.sessionId}
         · 시행 ${s.log.trials.length}개 · ${s.done ? '완료' : '중단'}</div>
       <div class="btns"><button class="small" data-i="${i}" data-k="trials">시행 CSV</button>
-        <button class="small" data-i="${i}" data-k="rounds">판 CSV</button></div></div>`).join('');
+        <button class="small" data-i="${i}" data-k="rounds">스테이지 CSV</button></div></div>`).join('');
   box.onclick = (e) => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -913,11 +1194,15 @@ function renderHistory() {
 // ============================================================
 function hudState(now) {
   const R = game.R, T = game.T;
-  const st = { sec: Math.max(0, Math.ceil(R.leftMs / 1000)), paused: !(T && T.state === 'aim'), score: R.score, combo: R.combo };
+  const st = { kills: R.hits, goal: R.goal, score: R.score, combo: R.combo };
   const fb = game.fb && now < game.fb.until ? game.fb : null;
   if (T) {
-    if (T.state === 'read') { st.cmd = T.cmd; st.prompt = `${confirmName()} 확인`; }
-    else { if (S.keepCmd) { st.cmd = T.cmd; st.cmdDim = true; } st.prompt = `${shootName()} 쏘세요`; st.promptColor = '#9fb4ff'; }
+    if (T.state === 'read') { st.cmd = T.cmd; st.prompt = game.mode === 'vr' ? 'A/X 버튼으로 확인' : 'Space로 확인'; }
+    else {
+      if (S.keepCmd) { st.cmd = T.cmd; st.cmdDim = true; }
+      st.prompt = game.mode === 'vr' ? '방아쇠로 쏘세요' : '클릭으로 쏘세요';
+      st.promptColor = '#f7dfa6';
+    }
   }
   if (fb) { st.prompt = fb.text; st.promptColor = fb.color; }
   return st;
@@ -929,13 +1214,10 @@ function loop() {
   else if (game.mode !== 'vr') camera.rotation.set(-mouse.pitch, -mouse.yaw, 0, 'YXZ');
   scene.updateMatrixWorld();
 
-  if (game.phase === 'starting' && --game.startFrames <= 0) { anchorField(); showIntro(); }
-  if (game.phase === 'play') {
-    const R = game.R;
-    if (game.T && game.T.state === 'aim') R.leftMs -= now - R.lastT;
-    R.lastT = now;
-    if (R.leftMs <= 0) endRound();
-    else if (!game.T && now >= game.nextTrialAt) newTrial(now);
+  if (game.phase === 'starting' && --game.startFrames <= 0) { anchorField(); showWeapons(); }
+  if (game.phase === 'play' && !game.T && now >= game.nextTrialAt) {
+    if (game.R.hits >= game.R.goal) endRound();
+    else newTrial(now);
   }
   if (game.phase === 'play') {
     const st = hudState(now);
@@ -1000,3 +1282,15 @@ $('btnDesk').onclick = async () => { await fontsReady; initAudio(); startSession
     ? 'VR 준비됨. 헤드셋을 쓰고 VR로 시작을 누르세요.'
     : (window.isSecureContext ? '이 브라우저에서는 VR을 쓸 수 없습니다. Quest 브라우저에서 여세요.' : 'VR은 HTTPS 주소에서만 됩니다.');
 })();
+
+// 테스트용: 주소에 ?debug 가 있을 때만 정답 자동 사격 도우미를 연다
+if (location.search.includes('debug')) {
+  window.__dbg = {
+    game, log: () => log, tick: () => loop(), click: (i) => panel.click(i), panelTitle: () => panel.spec && panel.spec.title,
+    hitCorrect() {
+      const g = targetGroup.children.find((x) => x.userData.spec && x.userData.spec.correct);
+      if (g) shoot({ kind: 'target', obj: g });
+      return !!g;
+    },
+  };
+}

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HUD 거리 사격 실험</title>
+<title>총잡이 훈련장</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap" rel="stylesheet">
@@ -55,8 +55,8 @@
 
 <div id="menu">
   <div class="wrap">
-    <h1>HUD 거리 사격 실험</h1>
-    <p class="sub">HUD 지령을 읽고 확인 버튼 → 나타난 표적 중 맞는 것을 쏜다. HUD 거리 조건 A 가까이 · B 초점 거리 · C 표적과 같은 거리.</p>
+    <h1>총잡이 훈련장 · HUD 거리 실험</h1>
+    <p class="sub">판타지 RPG의 총 튜토리얼. 퀘스트 창(HUD)의 목표를 읽고 확인 버튼 → 나타난 과녁·몬스터 중 목표를 쏜다. HUD 거리 조건 A 가까이 · B 초점 거리 · C 표적과 같은 거리 (훈련 1·2·3단계에 하나씩).</p>
 
     <div class="card">
       <h2>참가자</h2>
@@ -76,15 +76,16 @@
     </div>
 
     <div class="card">
-      <h2>조건과 판 설정 (예비 실험에서 확정)</h2>
+      <h2>조건과 스테이지 설정 (예비 실험에서 확정)</h2>
       <div class="grid">
         <label>A 가까이: HUD 거리 (m) <input id="f_near" type="number" step="0.05" min="0.2"></label>
         <label>B 초점 거리: HUD 거리 (m) <input id="f_focal" type="number" step="0.05" min="0.2"></label>
         <label>C 표적 거리 = HUD 거리 (m) <input id="f_target" type="number" step="0.5" min="1"></label>
-        <label>한 판 길이 (초) <input id="f_roundSec" type="number" step="5" min="10"></label>
-        <label>조건당 판 수 <input id="f_roundsPer" type="number" step="1" min="1"></label>
-        <label>연습 판 길이 (초) <input id="f_practiceSec" type="number" step="5" min="10"></label>
-        <label class="inline"><input id="f_practice" type="checkbox"> 시작 전에 연습 판 (B 조건, 기록에 practice=1로 남음)</label>
+        <label>스테이지당 목표 수 <input id="f_stageKills" type="number" step="1" min="1"></label>
+        <label>그중 마지막 몇 개를 몬스터로 <input id="f_monsterKills" type="number" step="1" min="0"></label>
+        <label>조건당 스테이지 수 <input id="f_roundsPer" type="number" step="1" min="1"></label>
+        <label>기초 훈련 목표 수 <input id="f_practiceKills" type="number" step="1" min="1"></label>
+        <label class="inline"><input id="f_practice" type="checkbox"> 시작 전에 기초 훈련 (B 조건, 기록에 practice=1로 남음)</label>
       </div>
       <details>
         <summary>고급 설정</summary>
