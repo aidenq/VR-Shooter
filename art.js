@@ -657,6 +657,145 @@ export function makeGun() {
 }
 
 // ============================================================
+// 무기 고르는 공간: 배경 없이 어둠 속에 무기가 떠 있다
+// ============================================================
+// 가운데를 원점으로 맞춘 전시용 무기 (높이 약 0.6~0.75 m)
+export function makeDisplayWeapon(kind) {
+  const root = new THREE.Group(), g = new THREE.Group();
+  root.add(g);
+  const steel = new THREE.MeshPhongMaterial({ color: 0xdfe6ee, shininess: 90, specular: 0x8a8a8a, flatShading: true });
+  const gold = new THREE.MeshPhongMaterial({ color: 0xd9a845, shininess: 60, specular: 0x664422 });
+  const wood = new THREE.MeshLambertMaterial({ color: 0x7a4a26 });
+  const leather = new THREE.MeshLambertMaterial({ color: 0x3a2418 });
+  const add = (geo, mat, x, y, z = 0, rz = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.z = rz; g.add(m); return m; };
+  if (kind === 'sword') {
+    const s = new THREE.Shape();
+    s.moveTo(-0.032, 0); s.lineTo(0.032, 0); s.lineTo(0.032, 0.46); s.lineTo(0, 0.55); s.lineTo(-0.032, 0.46); s.closePath();
+    add(new THREE.ExtrudeGeometry(s, { depth: 0.01, bevelEnabled: true, bevelThickness: 0.004, bevelSize: 0.004, bevelSegments: 1 }), steel, 0, 0.03, -0.005);
+    add(new THREE.BoxGeometry(0.2, 0.03, 0.04), gold, 0, 0.015);
+    add(new THREE.CylinderGeometry(0.016, 0.016, 0.13, 10), leather, 0, -0.065);
+    add(new THREE.SphereGeometry(0.026, 12, 8), gold, 0, -0.14);
+    add(new THREE.OctahedronGeometry(0.018), new THREE.MeshBasicMaterial({ color: 0xff4a5a }), 0, 0.015, 0.024);
+    g.position.y = -0.2;
+  } else if (kind === 'bow') {
+    const arc = add(new THREE.TorusGeometry(0.32, 0.013, 8, 40, Math.PI * 0.85), wood, 0, 0);
+    arc.rotation.z = Math.PI * 0.575;
+    add(new THREE.CylinderGeometry(0.0025, 0.0025, 0.62, 6), new THREE.MeshBasicMaterial({ color: 0xf2ecd8 }), -0.075, 0);
+    add(new THREE.CylinderGeometry(0.019, 0.019, 0.09, 10), leather, -0.32, 0);
+    add(new THREE.CylinderGeometry(0.005, 0.005, 0.52, 6), new THREE.MeshLambertMaterial({ color: 0xd9c9a6 }), -0.3, 0, 0.02, Math.PI / 2);
+    add(new THREE.ConeGeometry(0.018, 0.06, 6), steel, -0.585, 0, 0.02, Math.PI / 2);
+    for (const sy of [-1, 1]) {
+      const f = add(new THREE.PlaneGeometry(0.07, 0.025), new THREE.MeshBasicMaterial({ color: 0xc0392b, side: THREE.DoubleSide }), -0.08, sy * 0.014, 0.02);
+      f.rotation.z = sy * 0.3;
+    }
+    g.position.x = 0.2;
+  } else if (kind === 'staff') {
+    add(new THREE.CylinderGeometry(0.015, 0.02, 0.8, 10), wood, 0, -0.08);
+    add(new THREE.CylinderGeometry(0.026, 0.02, 0.05, 12), gold, 0, 0.33);
+    const ring = add(new THREE.TorusGeometry(0.06, 0.008, 6, 24), gold, 0, 0.4);
+    ring.rotation.x = Math.PI / 2;
+    for (let i = 0; i < 3; i++) {
+      const a = i * Math.PI * 2 / 3;
+      const c = new THREE.Mesh(new THREE.ConeGeometry(0.01, 0.1, 6), gold);
+      c.position.set(Math.cos(a) * 0.055, 0.44, Math.sin(a) * 0.055);
+      c.rotation.set(Math.sin(a) * -0.35, 0, Math.cos(a) * 0.35);
+      g.add(c);
+    }
+    add(new THREE.SphereGeometry(0.055, 16, 12), new THREE.MeshBasicMaterial({ color: 0x8ff6ff }), 0, 0.4);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: TX.dot, color: 0x5fd8ff, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    glow.position.set(0, 0.4, 0); glow.scale.setScalar(0.32); g.add(glow);
+    g.position.y = -0.08;
+  } else { // gun: 손에 드는 리볼버를 키워서 옆모습이 보이게
+    const gun = makeGun();
+    gun.scale.setScalar(2.8);
+    gun.rotation.y = -Math.PI / 2;
+    g.add(gun);
+    g.position.set(-0.3, 0.04, 0);
+  }
+  return root;
+}
+// 잠긴 무기는 어둡게
+export function dimModel(root, f = 0.42) {
+  root.traverse((o) => {
+    if (!o.material) return;
+    o.material = o.material.clone();
+    if (o.material.color) o.material.color.multiplyScalar(f);
+    if (o.material.specular) o.material.specular.multiplyScalar(f);
+  });
+}
+// 무기 아래 바닥 마법진
+export function makePedestal(locked) {
+  const base = locked ? 0.22 : 0.6;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.62), new THREE.MeshBasicMaterial({
+    map: TX.rune, color: locked ? 0x8a7aa8 : 0xffd98a, transparent: true, opacity: base,
+    blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+  }));
+  m.rotation.x = -Math.PI / 2;
+  m.userData.base = base;
+  return m;
+}
+// 무기 이름표
+export function makeWeaponLabel(name, locked) {
+  const { ctx, tex } = canvasTex(512, 160);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (locked) {
+    ctx.font = `900 72px ${SERIF}`; ctx.fillStyle = '#8a8196'; ctx.fillText(name, 256, 58);
+    drawIcon(ctx, 'lock', 214, 128, 34);
+    ctx.textAlign = 'left'; ctx.font = `500 30px ${FONT}`; ctx.fillStyle = '#8a8196'; ctx.fillText('잠김', 238, 130);
+  } else {
+    goldText(ctx, name, 256, 58, 76);
+    ctx.font = `700 30px ${FONT}`; ctx.fillStyle = '#f7dfa6'; ctx.fillText('선택 가능', 256, 130);
+  }
+  tex.needsUpdate = true;
+  return new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.13125),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }));
+}
+// 공중에 뜬 제목 글자 (테두리 없는 글자만)
+export function makeTitlePlane() {
+  const { ctx, tex } = canvasTex(1024, 256);
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.375),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }));
+  const draw = (title, sub, warn = false) => {
+    ctx.clearRect(0, 0, 1024, 256);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `700 30px ${FONT}`; ctx.fillStyle = '#c9a86a'; ctx.fillText('모험의 시작', 512, 32);
+    goldText(ctx, title, 512, 106, 90);
+    divider(ctx, 512, 166, 520);
+    ctx.font = `500 40px ${FONT}`; ctx.fillStyle = warn ? '#ff9a8a' : '#ece0c6';
+    ctx.fillText(sub, 512, 216);
+    tex.needsUpdate = true;
+  };
+  return { mesh, draw };
+}
+// 어둠 속에 떠다니는 희미한 빛 먼지
+export function makeVoidDust() {
+  const R = rng(31), n = 220, p = [];
+  for (let i = 0; i < n; i++) {
+    const r = 1.4 + R() * 5, th = R() * Math.PI * 2, ph = Math.acos(2 * R() - 1);
+    p.push(r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph), r * Math.sin(ph) * Math.sin(th));
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+  return new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.03, map: TX.dot, color: 0xffe0a0, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+}
+// HUD 자막 (더빙 대사)
+export function drawSubtitle(c, W, H, st) {
+  c.clearRect(0, 0, W, H);
+  drawFrame(c, W, H, 40);
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  if (st.speaker) {
+    c.font = `700 38px ${FONT}`; c.fillStyle = '#c9a86a'; c.fillText(st.speaker, W / 2, 96);
+    divider(c, W / 2, 140, 380);
+  }
+  let size = 88;
+  c.font = `800 ${size}px ${FONT}`;
+  while (size > 48 && c.measureText(st.text).width > W - 140) { size -= 4; c.font = `800 ${size}px ${FONT}`; }
+  c.shadowColor = 'rgba(0,0,0,0.75)'; c.shadowBlur = 12; c.shadowOffsetY = 4;
+  c.fillStyle = '#fffaf0'; c.fillText(st.text, W / 2, 290);
+  c.shadowColor = 'transparent'; c.shadowBlur = 0; c.shadowOffsetY = 0;
+}
+
+// ============================================================
 // 효과
 // ============================================================
 export function makeBurst(pos, hex, scale, now) {
@@ -760,7 +899,7 @@ export function buildWorld(scene, decor) {
   const R = rng(20261127);
   const rnd = (a, b) => a + R() * (b - a);
   const SUN = dirAzEl(-118, 5);
-  scene.background = new THREE.Color(0x14122a);
+  scene.background = new THREE.Color(0x06050b); // 훈련장에서는 하늘이 덮고, 무기 고르는 공간에서는 이 어둠만 보인다
   scene.fog = new THREE.Fog(0x7a6c9c, 45, 170);
 
   decor.add(new THREE.HemisphereLight(0xcfc4ff, 0x3a4a2a, 1.4));

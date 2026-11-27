@@ -2,7 +2,13 @@ import * as THREE from 'three';
 import {
   DEG, initArt, TX, buildWorld, canvasTex, drawQuest, drawPanel,
   makeShield, makeMonster, makeGun, makeMarker, makeHalo, makeBurst, makeFloatText,
+  makeDisplayWeapon, dimModel, makePedestal, makeWeaponLabel, makeTitlePlane, makeVoidDust, drawSubtitle,
 } from './art.js';
+
+// 더빙 대사. 음성 파일을 demo/audio/ 에 넣으면 자막과 함께 재생되고, 파일이 없으면 자막만 뜬다.
+const VOICES = {
+  toTraining: { file: 'audio/to_training.mp3', speaker: '안내', text: '훈련장으로 이동합니다.' },
+};
 
 // ============================================================
 // 상수
@@ -172,10 +178,122 @@ function anchorField() {
 }
 
 // ============================================================
-// 표적: 문양 방패 과녁 / 몬스터 (반지름 1 단위 안)
+// 무기 고르는 공간: 배경 없이 어둠 속에 무기들이 떠 있고, 가리켜서 쏘면 고른다
 // ============================================================
 const HIT_GEO = new THREE.CircleGeometry(1, 32);
 const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+const armory = { group: new THREE.Group(), items: [], hits: [], title: null, chosen: null, t0: 0, hover: null };
+{
+  const g = armory.group;
+  g.visible = false;
+  scene.add(g);
+  g.add(new THREE.HemisphereLight(0xfff4e0, 0x2a1e3a, 1.3));
+  const key = new THREE.DirectionalLight(0xfff0d0, 2.2);
+  key.position.set(0.6, 2.2, 1.2); key.target.position.set(0, 0, -1.8);
+  g.add(key, key.target);
+  g.add(makeVoidDust());
+  const D = 2.2;
+  WEAPONS.forEach((w, i) => {
+    const az = -30 + i * 20;
+    const slot = new THREE.Group();
+    const home = new THREE.Vector3(Math.sin(az * DEG) * D, -0.12, -Math.cos(az * DEG) * D);
+    slot.position.copy(home);
+    slot.rotation.y = -az * DEG;
+    const pivot = new THREE.Group();
+    const model = makeDisplayWeapon(w.icon);
+    model.scale.setScalar(0.82);
+    if (w.locked) dimModel(model, 0.3);
+    pivot.add(model);
+    const pad = makePedestal(w.locked); pad.position.y = -0.42;
+    const label = makeWeaponLabel(w.label, w.locked); label.position.y = -0.56;
+    const hit = new THREE.Mesh(new THREE.SphereGeometry(0.36, 12, 8), hitMat);
+    slot.add(pivot, pad, label, hit);
+    const it = { ...w, slot, pivot, pad, label, hit, home, yaw: -az * DEG, hover: 0, phase: i * 1.3, shakeT: -1e9 };
+    hit.userData.weapon = it;
+    armory.items.push(it);
+    armory.hits.push(hit);
+    g.add(slot);
+  });
+  armory.title = makeTitlePlane();
+  armory.title.mesh.position.set(0, 0.58, -2.5);
+  g.add(armory.title.mesh);
+}
+function resetArmory() {
+  armory.chosen = null; armory.hover = null;
+  for (const it of armory.items) {
+    it.slot.position.copy(it.home); it.slot.rotation.y = it.yaw;
+    it.pivot.scale.setScalar(1); it.hover = 0; it.shakeT = -1e9;
+    it.label.material.opacity = 1; it.label.visible = true; it.pad.visible = true;
+  }
+}
+const ease = (k) => 1 - (1 - Math.min(1, Math.max(0, k))) ** 3;
+function updateArmory(now) {
+  if (!armory.group.visible) return;
+  const ck = armory.chosen ? (now - armory.t0) / 700 : 0;
+  for (const it of armory.items) {
+    const want = it === armory.hover && !armory.chosen && !it.locked ? 1 : it === armory.hover && !armory.chosen ? 0.35 : 0;
+    it.hover += (want - it.hover) * 0.18;
+    let s = 1 + 0.15 * it.hover;
+    it.pivot.position.y = Math.sin(now * 0.0015 + it.phase) * 0.03;
+    it.pivot.rotation.y = Math.sin(now * 0.0008 + it.phase) * 0.45;
+    const sk = (now - it.shakeT) / 350;
+    it.pivot.rotation.z = sk < 1 ? Math.sin(sk * 22) * 0.18 * (1 - sk) : 0;
+    let padOp = it.pad.userData.base + 0.35 * it.hover;
+    if (!it.locked) padOp += 0.12 * Math.sin(now * 0.004);
+    if (armory.chosen) {
+      if (it === armory.chosen) {
+        // 고른 무기는 가운데 앞으로 다가오며 한 바퀴 돈다
+        it.slot.position.lerpVectors(it.home, new THREE.Vector3(0, 0.06, -1.5), ease(ck));
+        it.slot.rotation.y = it.yaw * (1 - ease(ck));
+        it.pivot.rotation.y += ease(ck) * Math.PI * 2;
+        s *= 1 + 0.2 * ease(ck);
+        padOp = 0.9;
+      } else {
+        s *= Math.max(0.001, 1 - ease(ck * 1.6));
+        padOp *= 1 - ease(ck * 1.6);
+      }
+      it.label.material.opacity = 1 - ease(ck * 2);
+    }
+    it.pivot.scale.setScalar(s);
+    it.pad.material.opacity = Math.max(0, padOp);
+  }
+}
+function placeArmory() {
+  const h = headPose();
+  armory.group.position.copy(h.pos);
+  armory.group.rotation.set(0, h.yaw, 0);
+}
+
+// 화면 전체를 검게 덮었다가 걷는 막 (장면 전환용)
+const fade = (() => {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, side: THREE.BackSide, depthTest: false, depthWrite: false, fog: false }));
+  mesh.renderOrder = 2000; mesh.visible = false;
+  scene.add(mesh);
+  return { mesh, from: 0, to: 0, t0: 0, dur: 1 };
+})();
+function fadeTo(target, ms) {
+  fade.from = fade.mesh.material.opacity; fade.to = target; fade.t0 = performance.now(); fade.dur = ms;
+}
+function updateFade(now) {
+  const k = Math.min(1, (now - fade.t0) / fade.dur);
+  const o = fade.from + (fade.to - fade.from) * k;
+  fade.mesh.material.opacity = o;
+  fade.mesh.visible = o > 0.001;
+  camera.getWorldPosition(fade.mesh.position);
+}
+
+// 프레임에 맞춰 도는 예약 실행
+const timers = [];
+function after(ms, fn) { timers.push({ at: performance.now() + ms, fn }); }
+function runTimers(now) {
+  const due = timers.filter((t) => now >= t.at).sort((a, b) => a.at - b.at);
+  for (const t of due) { timers.splice(timers.indexOf(t), 1); t.fn(); }
+}
+
+// ============================================================
+// 표적: 문양 방패 과녁 / 몬스터 (반지름 1 단위 안)
+// ============================================================
 let colliders = []; // 레이 판정 대상
 
 function makeTarget(spec, kind) {
@@ -255,6 +373,10 @@ function setHudDistance(d) {
 }
 function drawHUD(st) {
   drawQuest(hud.ctx, 1024, 512, st);
+  hud.tex.needsUpdate = true;
+}
+function drawSubtitleHUD(sub) {
+  drawSubtitle(hud.ctx, 1024, 512, sub);
   hud.tex.needsUpdate = true;
 }
 function placeHUD() {
@@ -353,6 +475,30 @@ function beep(freq, dur = 0.08, type = 'sine', vol = 0.12, delay = 0) {
 function chime(freqs, step = 0.07, vol = 0.1, dur = 0.22) {
   freqs.forEach((f, i) => { beep(f, dur, 'sine', vol, i * step); beep(f * 2, dur * 0.7, 'sine', vol * 0.25, i * step); });
 }
+// 더빙: 파일을 미리 받아 두고, 재생할 때 자막(HUD)도 함께 띄운다
+const voiceBuf = {};
+async function loadVoices() {
+  if (!actx) return;
+  for (const [k, v] of Object.entries(VOICES)) {
+    if (k in voiceBuf) continue;
+    voiceBuf[k] = null;
+    try {
+      const r = await fetch(v.file, { cache: 'no-store' });
+      if (r.ok) voiceBuf[k] = await actx.decodeAudioData(await r.arrayBuffer());
+    } catch { /* 파일 없음: 자막만 */ }
+  }
+}
+function playVoice(key) {
+  const v = VOICES[key], buf = voiceBuf[key];
+  let ms = Math.max(1800, v.text.length * 160);
+  if (actx && buf) {
+    const src = actx.createBufferSource();
+    src.buffer = buf; src.connect(actx.destination); src.start();
+    ms = buf.duration * 1000 + 300;
+  }
+  game.subtitle = { speaker: v.speaker, text: v.text, until: performance.now() + ms };
+  return ms;
+}
 function bang() {
   if (!actx || !noiseBuf) return;
   const t = actx.currentTime;
@@ -380,6 +526,10 @@ function castScene(rc) {
   if (panel.mesh.visible) {
     const h = rc.intersectObject(panel.mesh, false)[0];
     if (h) return { kind: 'panel', dist: h.distance, point: h.point, uv: h.uv };
+  }
+  if (armory.group.visible && !armory.chosen) {
+    const w = rc.intersectObjects(armory.hits, false)[0];
+    if (w) return { kind: 'weapon', dist: w.distance, point: w.point, item: w.object.userData.weapon };
   }
   const t = rc.intersectObjects(colliders, false)[0];
   if (t) return { kind: 'target', dist: t.distance, point: t.point, obj: t.object.userData.target };
@@ -431,18 +581,23 @@ function pollButtons() {
 }
 
 function updateRays(now) {
-  let hover = -1;
+  let hover = -1, weapon = null;
   if (game.mode === 'vr') {
     for (const c of controllers) {
       if (!c.visible) continue;
+      // 무기를 고르기 전에는 빈손: 총 없이 조준선만 손에서 나간다
+      c.userData.gun.visible = game.gunEquipped;
+      const start = game.gunEquipped ? MUZZLE : 0;
+      c.userData.line.position.z = -start;
       const res = castScene(controllerRay(c));
-      c.userData.line.scale.z = Math.max(0.01, (res ? res.dist : 12) - MUZZLE);
+      c.userData.line.scale.z = Math.max(0.01, (res ? res.dist : 12) - start);
+      if (res && res.kind === 'weapon') weapon = res.item;
       const ret = c.userData.reticle;
       ret.visible = !!res;
       if (res) {
         ret.position.copy(res.point);
         ret.scale.setScalar(Math.max(0.012, res.dist * 0.03));
-        ret.material.color.set(res.kind === 'target' ? 0xffffff : 0xffd98a);
+        ret.material.color.set(res.kind === 'target' || res.kind === 'weapon' ? 0xffffff : 0xffd98a);
       }
       if (res && res.kind === 'panel') hover = panel.pick(res.uv);
       const gem = c.userData.gun.userData;
@@ -454,9 +609,14 @@ function updateRays(now) {
     raycaster.setFromCamera(mouse.ndc, camera);
     const res = castScene(raycaster);
     if (res && res.kind === 'panel') hover = panel.pick(res.uv);
+    if (res && res.kind === 'weapon') weapon = res.item;
     renderer.domElement.style.cursor = res ? 'pointer' : 'crosshair';
   }
   panel.setHover(hover);
+  if (weapon !== armory.hover) {
+    armory.hover = weapon;
+    if (weapon) beep(weapon.locked ? 700 : 1400, 0.03, 'sine', 0.04);
+  }
 }
 
 // 마우스: 드래그 = 둘러보기, 클릭 = 쏘기
@@ -509,6 +669,10 @@ function onShoot(rc, ctrl) {
     if (res && res.kind === 'panel') panel.click(panel.pick(res.uv));
     return;
   }
+  if (game.phase === 'weapon') {
+    if (res && res.kind === 'weapon') chooseWeapon(res.item);
+    return;
+  }
   if (game.phase === 'play' && game.T && game.T.state === 'aim') {
     bang();
     if (ctrl) recoil(ctrl.userData.gun, performance.now());
@@ -525,9 +689,10 @@ function onConfirm() {
 // ============================================================
 const game = {
   mode: null,      // 'vr' | 'desktop' | null
-  phase: 'idle',   // idle | starting | weapon | intro | play | clear | survey | final | done | paused
+  phase: 'idle',   // idle | starting | weapon | choosing | intro | play | clear | survey | final | done | paused
   rounds: [], ri: 0, R: null, T: null, nextTrialAt: 0,
   sessionId: '', fb: null, lastCmd: '', startFrames: 0, xrSession: null, pausedFrom: null,
+  gunEquipped: false, subtitle: null,
 };
 let log = { trials: [], rounds: [], prefs: null };
 
@@ -556,6 +721,15 @@ function startSession(mode) {
   game.rounds = rounds;
   game.ri = 0;
   game.lastCmd = '';
+  game.gunEquipped = false;
+  game.subtitle = null;
+  timers.length = 0;
+  // 무기를 고를 때는 배경 없는 어두운 공간
+  decor.visible = false;
+  markerGroup.visible = false;
+  clearTargets();
+  resetArmory();
+  loadVoices();
   $('menu').hidden = true;
   $('help').hidden = mode !== 'desktop';
   if (mode === 'desktop') resetDeskCamera();
@@ -563,24 +737,44 @@ function startSession(mode) {
   game.startFrames = 3; // VR 첫 프레임의 머리 위치를 받은 뒤 안내판을 띄운다
 }
 
-function showWeapons(msg) {
+const weaponHint = () => (game.mode === 'vr' ? '무기를 가리키고 방아쇠를 당기세요' : '무기를 클릭해서 고르세요');
+function showWeapons() {
   game.phase = 'weapon';
-  panel.show({
-    kicker: '모험의 시작',
-    title: '무기를 고르세요',
-    lines: [msg || '모험을 떠나기 전에 쓸 무기를 하나 고릅니다.'],
-    buttons: WEAPONS.map((w) => ({
-      label: w.label, icon: w.icon, sub: w.locked ? '잠김' : '선택 가능', disabled: w.locked,
-      onLocked: () => showWeapons('아직 열리지 않은 무기입니다. 총을 골라 보세요.'),
-      onClick: () => {
-        panel.show({
-          kicker: '무기 획득',
-          title: '마법 리볼버',
-          lines: ['룬이 새겨진 총. 멀리 있는 적도 한 발에 정확하게.', '훈련장에서 쓰는 법을 익혀 봅시다.'],
-          buttons: [{ label: '훈련장으로', onClick: showIntro }],
-        });
-      },
-    })),
+  panel.hide();
+  hud.group.visible = false;
+  setHudDistance(S.focal); // 자막이 뜰 HUD 거리
+  placeArmory();
+  armory.title.draw('무기를 고르세요', weaponHint());
+  armory.group.visible = true;
+}
+function chooseWeapon(it) {
+  const now = performance.now();
+  if (it.locked) {
+    it.shakeT = now;
+    beep(180, 0.14, 'square', 0.05);
+    armory.title.draw('무기를 고르세요', '아직 잠긴 무기예요. 총을 골라 보세요.', true);
+    after(2200, () => { if (game.phase === 'weapon') armory.title.draw('무기를 고르세요', weaponHint()); });
+    return;
+  }
+  game.phase = 'choosing';
+  armory.chosen = it; armory.t0 = now;
+  armory.title.draw('마법 리볼버', '룬이 새겨진 총을 손에 넣었습니다');
+  chime([784, 1047, 1568], 0.08, 0.1, 0.45);
+  // 고른 무기 연출 → 더빙(지금은 자막) → 암전 → 훈련장
+  after(800, () => {
+    const ms = playVoice('toTraining');
+    after(ms, () => {
+      fadeTo(1, 500);
+      after(560, () => {
+        armory.group.visible = false;
+        decor.visible = true;
+        markerGroup.visible = true;
+        game.gunEquipped = true;
+        anchorField();
+        fadeTo(0, 700);
+        after(350, showIntro);
+      });
+    });
   });
 }
 
@@ -844,6 +1038,8 @@ function resumeGame() {
     hud.group.visible = true;
   } else if (from.spec) {
     panel.show(from.spec);
+  } else {
+    panel.hide(); // 무기 고르는 공간처럼 패널이 없던 화면
   }
 }
 
@@ -856,6 +1052,12 @@ function stopGame() {
   if (game.phase === 'play' && game.T) logTrial(game.T, false);
   if (game.sessionId && (log.trials.length || log.rounds.length)) saveSession();
   game.phase = 'idle'; game.mode = null; game.T = null; game.R = null;
+  game.subtitle = null; game.gunEquipped = false;
+  timers.length = 0;
+  fadeTo(0, 1);
+  armory.group.visible = false;
+  decor.visible = true;
+  markerGroup.visible = true;
   panel.hide();
   hud.group.visible = false;
   clearTargets();
@@ -1002,17 +1204,28 @@ function loop() {
     if (game.R.hits >= game.R.goal) endRound();
     else newTrial(now);
   }
+  runTimers(now);
+  const sub = game.subtitle && now < game.subtitle.until ? game.subtitle : null;
   if (game.phase === 'play') {
     const st = hudState(now);
     const key = JSON.stringify(st);
     if (key !== hud.key) { hud.key = key; drawHUD(st); }
     // 확인 뒤 표적을 찾는 동안에는 HUD를 숨겨 표적을 가리지 않게 한다
     hud.group.visible = !(S.hideHud && game.T && game.T.state === 'aim');
+  } else if (sub) {
+    const key = 'sub|' + sub.speaker + '|' + sub.text;
+    if (key !== hud.key) { hud.key = key; drawSubtitleHUD(sub); }
+    hud.group.visible = true;
+  } else if (hud.key.startsWith('sub|')) {
+    hud.key = '';
+    hud.group.visible = false;
   }
   placeHUD();
   if (game.mode === 'vr') pollButtons();
   updateRays(now);
   updateFx(now);
+  updateArmory(now);
+  updateFade(now);
   panel.animate(now);
   world.update(now);
   renderer.render(scene, camera);
@@ -1076,6 +1289,7 @@ if (location.search.includes('debug')) {
   window.__dbg = {
     game, log: () => log, tick: () => loop(), click: (i) => panel.click(i), panelTitle: () => panel.spec && panel.spec.title,
     look: (yawDeg, pitchDeg = 0) => { mouse.yaw = yawDeg * DEG; mouse.pitch = pitchDeg * DEG; },
+    pickWeapon: (i) => chooseWeapon(armory.items[i]),
     // 모든 몬스터(또는 과녁)를 한 번에 늘어놓아 모양을 확인한다
     showcase(kind = 'monster') {
       clearTargets();
