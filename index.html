@@ -6,46 +6,76 @@
 <title>총잡이 훈련장</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=Noto+Serif+KR:wght@700;900&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#0b1020; --card:#141b30; --line:#2a3558; --text:#e6ecff; --mute:#8d9bc4; --accent:#4f7cff; --ok:#3ccf7e; }
+  :root {
+    --bg:#0d0a14; --text:#f1e6cc; --mute:#ab9c80; --gold:#e6c36a; --gold-deep:#a8782c;
+    --line:rgba(230,195,106,.28); --field:rgba(10,8,14,.72);
+    --serif:"Noto Serif KR","Noto Sans KR",serif;
+  }
   * { box-sizing: border-box; }
   html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
     font-family:"Noto Sans KR","Malgun Gothic",sans-serif; }
   #stage canvas { display:block; position:fixed; inset:0; }
-  #menu { position:fixed; inset:0; overflow:auto; background:rgba(8,12,24,.9); padding:24px 16px 48px; z-index:10; }
+  #menu { position:fixed; inset:0; overflow:auto; padding:32px 16px 56px; z-index:10;
+    background:
+      radial-gradient(900px 420px at 50% -8%, rgba(255,190,110,.22), transparent 70%),
+      linear-gradient(180deg, rgba(20,14,32,.78), rgba(8,6,12,.92));
+    backdrop-filter: blur(3px); }
   #menu[hidden] { display:none; }
-  .wrap { max-width:760px; margin:0 auto; }
-  h1 { font-size:26px; margin:0 0 4px; }
-  .sub { color:var(--mute); margin:0 0 20px; font-size:14px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
-  .card h2 { font-size:16px; margin:0 0 12px; }
+  .wrap { max-width:780px; margin:0 auto; }
+  .kicker { color:var(--gold); letter-spacing:.32em; font-size:12px; font-weight:700; margin-bottom:6px; }
+  h1 { font-family:var(--serif); font-weight:900; font-size:34px; line-height:1.2; margin:0 0 8px;
+    background:linear-gradient(180deg,#fff6d0 0%,#f2c95e 55%,#b07a26 100%);
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,.6)); }
+  .rule { height:2px; margin:10px 0 18px; background:linear-gradient(90deg,transparent,var(--gold),transparent); position:relative; }
+  .rule::after { content:""; position:absolute; left:50%; top:50%; width:10px; height:10px; background:#f6dc90;
+    transform:translate(-50%,-50%) rotate(45deg); }
+  .sub { color:var(--mute); margin:0 0 22px; font-size:14px; line-height:1.7; }
+  .card { position:relative; padding:18px; margin-bottom:16px; border-radius:14px;
+    background:linear-gradient(180deg, rgba(42,33,58,.92), rgba(18,14,26,.92));
+    border:1px solid var(--line);
+    box-shadow: inset 0 1px 0 rgba(255,230,170,.08), 0 12px 30px rgba(0,0,0,.35); }
+  .card h2 { font-family:var(--serif); color:var(--gold); font-size:17px; margin:0 0 14px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
-  label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--mute); }
+  label { display:flex; flex-direction:column; gap:5px; font-size:13px; color:var(--mute); }
   label.inline { flex-direction:row; align-items:center; gap:8px; color:var(--text); }
-  input, select { background:#0e1426; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px; font:inherit; font-size:15px; }
-  input[type=checkbox] { width:18px; height:18px; }
-  details summary { cursor:pointer; color:var(--mute); font-size:14px; margin-top:12px; }
+  input, select { background:var(--field); color:var(--text); border:1px solid var(--line); border-radius:8px;
+    padding:9px 10px; font:inherit; font-size:15px; }
+  input:focus, select:focus { outline:2px solid rgba(230,195,106,.55); outline-offset:1px; }
+  input[type=checkbox] { width:18px; height:18px; accent-color: var(--gold); }
+  details summary { cursor:pointer; color:var(--mute); font-size:14px; margin-top:14px; }
   details .grid { margin-top:12px; }
   .btns { display:flex; gap:12px; flex-wrap:wrap; }
-  button { font:inherit; border:0; border-radius:10px; padding:12px 18px; cursor:pointer; background:#26304f; color:var(--text); font-size:15px; }
-  button.primary { background:var(--accent); font-weight:700; font-size:17px; padding:14px 22px; }
-  button:disabled { opacity:.45; cursor:not-allowed; }
+  button { font:inherit; border-radius:10px; padding:12px 18px; cursor:pointer; color:var(--text); font-size:15px;
+    background:linear-gradient(180deg,#3d3150,#231b30); border:1px solid var(--line); }
+  button:hover:not(:disabled) { border-color:rgba(255,230,170,.7); }
+  button.primary { font-family:var(--serif); font-weight:900; font-size:18px; padding:14px 26px; color:#1c1208;
+    background:linear-gradient(180deg,#f3d27e,#b5822e); border:1px solid #fff0b8;
+    box-shadow:0 0 26px rgba(230,195,106,.35), inset 0 1px 0 rgba(255,255,255,.5); }
+  button.primary:hover:not(:disabled) { box-shadow:0 0 34px rgba(255,210,120,.6), inset 0 1px 0 rgba(255,255,255,.5); }
+  button:disabled { opacity:.45; cursor:not-allowed; box-shadow:none; }
   button.small { padding:6px 10px; font-size:13px; }
-  #status { color:var(--mute); font-size:13px; margin-top:10px; min-height:1em; }
+  #status { color:var(--mute); font-size:13px; margin-top:12px; min-height:1em; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
-  th, td { border-bottom:1px solid var(--line); padding:6px 4px; text-align:right; }
+  th { color:var(--gold); font-weight:700; }
+  th, td { border-bottom:1px solid var(--line); padding:7px 4px; text-align:right; }
   th:first-child, td:first-child { text-align:left; }
-  .hist-item { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .hist-item { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:9px 0; border-bottom:1px solid var(--line); flex-wrap:wrap; }
   .hist-item .meta { font-size:13px; }
-  .hist-item .meta b { font-size:14px; }
+  .hist-item .meta b { font-size:14px; color:var(--gold); }
   .note { font-size:13px; color:var(--mute); line-height:1.6; }
-  #help { position:fixed; left:12px; bottom:12px; background:rgba(8,12,24,.8); border:1px solid var(--line);
-    border-radius:8px; padding:8px 12px; font-size:13px; color:var(--mute); z-index:5; }
+  #help { position:fixed; left:12px; bottom:12px; z-index:5; padding:8px 12px; font-size:13px; color:var(--mute);
+    background:rgba(14,10,20,.82); border:1px solid var(--line); border-radius:8px; }
+  #help b { color:var(--gold); }
   #help[hidden] { display:none; }
 </style>
 <script type="importmap">
-{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
 </script>
 </head>
 <body>
@@ -55,7 +85,9 @@
 
 <div id="menu">
   <div class="wrap">
-    <h1>총잡이 훈련장 · HUD 거리 실험</h1>
+    <div class="kicker">판타지 RPG · 총 튜토리얼</div>
+    <h1>총잡이 훈련장</h1>
+    <div class="rule"></div>
     <p class="sub">판타지 RPG의 총 튜토리얼. 퀘스트 창(HUD)의 목표를 읽고 확인 버튼 → 나타난 과녁·몬스터 중 목표를 쏜다. HUD 거리 조건 A 가까이 · B 초점 거리 · C 표적과 같은 거리 (훈련 1·2·3단계에 하나씩).</p>
 
     <div class="card">
